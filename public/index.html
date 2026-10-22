@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Wonder Meadow — ask the meadow, anyone may answer</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="world"></canvas>
+
+  <!-- loading veil -->
+  <div id="loading" class="loading">
+    <div class="loading-card">
+      <div class="loading-sprout">🌱</div>
+      <p>growing the meadow…</p>
+    </div>
+  </div>
+
+  <!-- top bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-emoji">🌿</span>
+      <div class="brand-text">
+        <h1>Wonder Meadow</h1>
+        <p>lost questions wander here until a stranger helps</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="btn-ask" class="btn btn-primary">🌼 Ask the meadow</button>
+      <button id="btn-lookup" class="btn btn-ghost">🔑 I have a code</button>
+      <button id="btn-sound" class="btn btn-ghost btn-icon" title="ambient sound" aria-label="toggle ambient sound">🔊</button>
+    </div>
+  </header>
+
+  <div id="hint" class="hint">drag to look around · pinch or scroll to zoom · tap a wanderer to help them</div>
+
+  <!-- ASK modal -->
+  <div id="modal-ask" class="overlay hidden">
+    <div class="card">
+      <button class="card-close" data-close>&times;</button>
+      <h2>🌼 Whisper a question</h2>
+      <p class="muted">No account needed. Your question becomes a little wanderer in the meadow, and anyone passing by may answer it.</p>
+      <textarea id="ask-text" maxlength="280" rows="4" placeholder="What's on your mind? e.g. “How do I stop overthinking everything?”"></textarea>
+      <div class="picker-row">
+        <div class="picker">
+          <label>your wanderer</label>
+          <div class="seg" id="ask-color">
+            <button type="button" data-value="f" class="seg-btn">🌸 feminine</button>
+            <button type="button" data-value="m" class="seg-btn">🌊 masculine</button>
+          </div>
+        </div>
+        <div class="picker">
+          <label>their mood</label>
+          <div class="seg" id="ask-expression">
+            <button type="button" data-value="smile" class="seg-btn">🙂 smiling</button>
+            <button type="button" data-value="frown" class="seg-btn">☹️ frowning</button>
+          </div>
+        </div>
+      </div>
+      <div class="row-between">
+        <span id="ask-count" class="char-count">0 / 280</span>
+        <button id="ask-submit" class="btn btn-primary">Release into the meadow 🕊️</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CODE result modal -->
+  <div id="modal-code" class="overlay hidden">
+    <div class="card">
+      <button class="card-close" data-close>&times;</button>
+      <h2>🔑 Your secret code</h2>
+      <p class="muted">This is the <strong>only</strong> way to find your answer later, and it works <strong>one time only</strong>. Screenshot it, tattoo it, whatever works.</p>
+      <div class="code-box">
+        <span id="code-value">····-····</span>
+        <button id="code-copy" class="btn btn-small">copy</button>
+        <button id="code-keepsake" class="btn btn-small" title="download a keepsake card with your code">🖼 keepsake</button>
+      </div>
+      <p class="muted small">Tip: checking before anyone has answered will <em>not</em> use up your code.</p>
+      <button class="btn btn-primary wide" data-close>I saved it, promise 🤞</button>
+    </div>
+  </div>
+
+  <!-- LOOKUP modal -->
+  <div id="modal-lookup" class="overlay hidden">
+    <div class="card">
+      <button class="card-close" data-close>&times;</button>
+      <h2>🔎 Find your question</h2>
+      <p class="muted">Enter the one-time code you received when you asked.</p>
+      <input id="lookup-code" class="input" placeholder="e.g. K3QF-9WMA" autocomplete="off" autocapitalize="characters" />
+      <button id="lookup-submit" class="btn btn-primary wide">Search the meadow</button>
+      <div id="lookup-result" class="lookup-result hidden"></div>
+    </div>
+  </div>
+
+  <!-- ANSWER panel -->
+  <div id="modal-answer" class="overlay hidden">
+    <div class="card">
+      <button id="answer-min" class="card-min" title="Minimize and watch them wander">&ndash;</button>
+      <button class="card-close" data-close>&times;</button>
+      <div class="asker-row">
+        <div class="asker-avatar">?</div>
+        <div>
+          <h2 class="asker-title">A confused wanderer asks…</h2>
+          <p id="answer-question" class="question-text"></p>
+        </div>
+      </div>
+      <input id="answer-alias" class="input" maxlength="24" placeholder="Your alias (required — any name, not blank)" autocomplete="off" />
+      <textarea id="answer-text" maxlength="500" rows="4" placeholder="Your kind, wise, or wonderfully weird answer…"></textarea>
+      <div class="row-between">
+        <span id="answer-count" class="char-count">0 / 500</span>
+        <button id="answer-submit" class="btn btn-primary">Send them to the sky ✨</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- the answered realm — above the clouds, where answered questions rest -->
+  <div id="heaven" class="heaven hidden">
+    <div class="heaven-glow"></div>
+    <div id="heaven-clouds-back" class="heaven-layer"></div>
+    <div class="heaven-hills">
+      <div class="hill hill-1"></div>
+      <div class="hill hill-2"></div>
+      <div class="hill hill-3"></div>
+    </div>
+    <div class="heaven-center">
+      <svg class="heaven-wanderer" viewBox="0 0 120 156" aria-hidden="true">
+        <text class="hw-sparkle" x="60" y="18" text-anchor="middle">✦</text>
+        <rect class="hw-skin" x="39" y="130" width="17" height="16" rx="7" fill="#58a8f0"/>
+        <rect class="hw-skin" x="64" y="130" width="17" height="16" rx="7" fill="#58a8f0"/>
+        <rect class="hw-skin" x="18" y="98" width="14" height="28" rx="7" fill="#58a8f0" transform="rotate(6 25 112)"/>
+        <rect class="hw-skin" x="88" y="98" width="14" height="28" rx="7" fill="#58a8f0" transform="rotate(-6 95 112)"/>
+        <rect class="hw-skin" x="33" y="90" width="54" height="46" rx="15" fill="#58a8f0"/>
+        <rect class="hw-skin" x="24" y="26" width="72" height="64" rx="19" fill="#58a8f0"/>
+        <path d="M42 54 q5 -6 10 0" stroke="#3a3630" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M68 54 q5 -6 10 0" stroke="#3a3630" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <path d="M47 68 q13 11 26 0" stroke="#3a3630" stroke-width="3.4" fill="none" stroke-linecap="round"/>
+        <circle cx="38" cy="62" r="4" fill="#ffffff" opacity="0.45"/>
+        <circle cx="82" cy="62" r="4" fill="#ffffff" opacity="0.45"/>
+      </svg>
+      <div class="heaven-card">
+        <div class="hc-label">you asked the meadow</div>
+        <p id="heaven-question" class="hc-question"></p>
+        <div class="hc-divider"><span>✦</span></div>
+        <div id="heaven-answers"></div>
+        <p class="hc-note">Your one-time code has now been used — this answer is yours to keep. 🕊️</p>
+        <button id="heaven-return" class="hc-return">Return to the meadow 🌿</button>
+      </div>
+    </div>
+    <div id="heaven-clouds-front" class="heaven-layer front"></div>
+  </div>
+
+  <div id="follow-chip" class="floating-chip hidden">👁 Following a wanderer — tap to stop</div>
+  <div id="min-chip" class="floating-chip hidden"></div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="main.js"></script>
+</body>
+</html>

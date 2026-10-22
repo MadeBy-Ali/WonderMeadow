@@ -1,0 +1,53 @@
+# Wonder Meadow — production stack for a VPS.
+#   docker compose up -d --build
+# Secrets live in a .env file next to this one (never commit it):
+#   POSTGRES_PASSWORD=<openssl rand -hex 24>
+#   ANTHROPIC_API_KEY=sk-ant-...        (optional — leave unset to run without the keeper)
+# For local development with the database reachable from your laptop (npm start
+# against Postgres), also load the dev override:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: meadow
+      POSTGRES_USER: meadow
+      # Compose refuses to start if this is missing — no accidental blank password.
+      # Note: only applies when the data volume is first created.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - meadow-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meadow -d meadow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No ports: block on purpose — the app reaches the db over the internal
+    # docker network (db:5432). Nothing outside Docker can connect to it.
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://meadow:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/meadow
+      PORT: 3000
+      TRUST_PROXY: 1
+      # The meadow keeper: moderation gate + AI resident questions.
+      # Tries flaz.id first, then falls back to Anthropic. Leave both unset to run
+      # without it. Optional overrides: FLAZ_BASE_URL, FLAZ_MODEL, MEADOW_AI_MODEL.
+      FLAZ_API_KEY: ${FLAZ_API_KEY:-}
+      FLAZ_BASE_URL: ${FLAZ_BASE_URL:-}
+      FLAZ_MODEL: ${FLAZ_MODEL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    # Loopback only: the reverse proxy (Caddy) on this machine can reach the app,
+    # the public internet cannot. Keeps TRUST_PROXY honest — nobody can bypass the
+    # proxy and forge X-Forwarded-For.
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  meadow-data:

@@ -1,0 +1,6 @@
+.claude
+.env
+node_modules
+data
+.idea
+.DS_Store

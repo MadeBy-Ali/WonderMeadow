@@ -1,0 +1,8 @@
+# Local development ONLY — never use this file on the VPS.
+# Publishes Postgres on 127.0.0.1:5433 so `npm start` on your laptop can reach it:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#   DATABASE_URL=postgres://meadow:<POSTGRES_PASSWORD from .env>@localhost:5433/meadow npm start
+services:
+  db:
+    ports:
+      - "127.0.0.1:5433:5432"

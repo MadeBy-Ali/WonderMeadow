@@ -1,0 +1,15 @@
+{
+  "name": "wonder-meadow",
+  "version": "1.0.0",
+  "description": "A 3D meadow where anonymous questions wander around until a kind stranger answers them.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "compression": "^1.8.2",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  }
+}
