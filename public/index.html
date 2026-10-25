@@ -6,13 +6,14 @@
   <title>Wonder Meadow — ask the meadow, anyone may answer</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>" />
   <!-- ?v= busts the 1-hour browser cache on main.js/opener.js/style.css: bump it on every release -->
-  <link rel="stylesheet" href="style.css?v=3" />
+  <link rel="stylesheet" href="style.css?v=6" />
   <script>
     // decide BEFORE first paint whether the opener shows (no flash of the meadow first).
     // First visit only; ?intro=1 forces it, ?intro=0 skips it.
     (function () {
       var p = new URLSearchParams(location.search).get('intro'), seen = false;
       try { seen = localStorage.getItem('meadow-intro-seen') === '1'; } catch (e) {}
+      try { if (localStorage.getItem('meadow-mood') === 'cozy') document.documentElement.dataset.mood = 'cozy'; } catch (e) {}
       if (p === '1' || (p !== '0' && !seen)) {
         document.documentElement.classList.add('opener-on');
         window.__openerActive = true; // main.js pauses the 3D world until you enter
@@ -41,7 +42,7 @@
 
   <!-- top bar -->
   <header class="topbar">
-    <div class="brand" title="Replay the intro">
+    <div class="brand" title="Replay the intro" role="button" tabindex="0" aria-label="Wonder Meadow — replay the intro">
       <span class="brand-emoji">🌿</span>
       <div class="brand-text">
         <h1>Wonder Meadow</h1>
@@ -51,6 +52,10 @@
     <div class="topbar-actions">
       <button id="btn-ask" class="btn btn-primary">🌼 Ask the meadow</button>
       <button id="btn-lookup" class="btn btn-ghost">🔑 I have a code</button>
+      <button id="btn-mood" class="btn btn-ghost btn-mood" type="button" role="switch" aria-checked="false" aria-label="cozy mood">
+        <span class="mood-track"><span class="mood-knob">🌧</span></span>
+        <span class="mood-label">limbo</span>
+      </button>
       <button id="btn-sound" class="btn btn-ghost btn-icon" title="ambient sound" aria-label="toggle ambient sound">🔊</button>
     </div>
   </header>
@@ -190,7 +195,7 @@
     <button class="op-enter" type="button">Enter the meadow →</button>
   </div>
 
-  <script type="module" src="opener.js?v=3"></script>
-  <script type="module" src="main.js?v=3"></script>
+  <script type="module" src="opener.js?v=6"></script>
+  <script type="module" src="main.js?v=6"></script>
 </body>
 </html>

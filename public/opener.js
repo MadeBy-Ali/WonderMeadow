@@ -132,14 +132,31 @@ function listen(on) {
 }
 
 // ---- show / leave ----------------------------------------------------------------
+const FADE_MS = 1100; // matches the #opener opacity/filter transition in style.css
+
 async function show() {
   if (state.active) return;
-  html.classList.add('opener-on');
-  root.classList.remove('leaving');
-  window.__openerActive = true;
+  // first load: the inline <head> script already put it on screen before first paint,
+  // so there's nothing to fade from. Replay (brand click): the meadow is visible, so fade in.
+  const alreadyCovering = html.classList.contains('opener-on') && !root.classList.contains('leaving');
   state.active = true;
   if (!state.built) await build();
-  state.p = state.target = 0;
+  state.target = 0;
+  state.p = alreadyCovering ? 0 : -0.35; // on replay the first phrase glides up into place as it fades in
+  render(0);
+
+  if (alreadyCovering) {
+    window.__openerActive = true;
+  } else {
+    if (!html.classList.contains('opener-on')) {
+      root.classList.add('entering');   // start fully transparent + blurred...
+      html.classList.add('opener-on');
+      void root.offsetWidth;            // ...commit that starting style...
+    }
+    root.classList.remove('leaving', 'entering'); // ...then the CSS transition fades + sharpens it in
+    // keep the meadow alive underneath the fade; pause it only once it's fully covered
+    setTimeout(() => { if (state.active) window.__openerActive = true; }, FADE_MS);
+  }
   state.last = performance.now();
   listen(true);
   requestAnimationFrame(frame);
@@ -155,7 +172,7 @@ function enter() {
   window.__openerActive = false;                       // the meadow starts rendering underneath...
   window.dispatchEvent(new CustomEvent('meadow:enter')); // ...and its camera descent begins
   root.classList.add('leaving');                       // while the opener fades and blurs away
-  setTimeout(() => { if (!state.active) { html.classList.remove('opener-on'); root.classList.remove('leaving'); } }, 1100);
+  setTimeout(() => { if (!state.active) { html.classList.remove('opener-on'); root.classList.remove('leaving'); } }, FADE_MS);
 }
 
 window.__meadowOpener = { show, enter, state }; // (state exposed for poking around in the console)
