@@ -144,6 +144,55 @@ controls.maxPolarAngle = Math.PI * 0.58; // allowed to peek below the horizon �
 controls.minPolarAngle = Math.PI * 0.06;
 controls.target.set(0, 0, 0);
 
+// Smooth wheel / trackpad zoom. OrbitControls applies every wheel event instantly, and a
+// Mac trackpad flick (or a pinch, which arrives as ctrl+wheel) fires a burst of events,
+// so the camera slammed from max to min in one gesture. Instead, wheel input moves a
+// target distance (in log space, so it feels the same near and far) and the camera eases
+// toward it every frame. The target may only run so far ahead of the camera, so momentum
+// scrolling keeps zooming at a steady pace instead of piling up. Touch pinch is left to
+// OrbitControls: it follows your fingers, so it was never snappy.
+const ZOOM = { perPixel: 0.0008, maxStep: 0.15, maxLead: 0.25, ease: 6 };
+const zoom = { target: null, gestureFrom: 0 };
+function zoomBy(logStep) {
+  const now = camera.position.distanceTo(controls.target);
+  const from = zoom.target ?? now;
+  const lead = THREE.MathUtils.clamp(Math.log(from / now) + logStep, -ZOOM.maxLead, ZOOM.maxLead);
+  zoom.target = THREE.MathUtils.clamp(now * Math.exp(lead), controls.minDistance, controls.maxDistance);
+}
+// capture on window runs before OrbitControls' own listener on the canvas
+window.addEventListener('wheel', (e) => {
+  if (e.target !== canvas) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!controls.enabled || focus.tween) return;
+  let dy = e.deltaY;
+  if (e.deltaMode === 1) dy *= 16;               // lines -> px
+  else if (e.deltaMode === 2) dy *= innerHeight; // pages -> px
+  if (e.ctrlKey) dy *= 3;                        // pinch deltas are tiny
+  zoomBy(THREE.MathUtils.clamp(dy * ZOOM.perPixel, -ZOOM.maxStep, ZOOM.maxStep));
+}, { passive: false, capture: true });
+// Safari reports a trackpad pinch as gesture events (and would zoom the whole page)
+canvas.addEventListener('gesturestart', (e) => {
+  e.preventDefault();
+  zoom.gestureFrom = zoom.target ?? camera.position.distanceTo(controls.target);
+});
+canvas.addEventListener('gesturechange', (e) => {
+  e.preventDefault();
+  if (!controls.enabled || focus.tween || !e.scale) return;
+  const now = camera.position.distanceTo(controls.target);
+  zoomBy(Math.log(zoom.gestureFrom / e.scale / (zoom.target ?? now)));
+});
+function updateZoom(rawDt) {
+  if (zoom.target == null) return;
+  if (!controls.enabled || focus.tween) { zoom.target = null; return; } // a fly-in owns the camera
+  const offset = _zv.copy(camera.position).sub(controls.target);
+  const now = offset.length();
+  const next = now + (zoom.target - now) * Math.min(1, rawDt * ZOOM.ease);
+  camera.position.copy(controls.target).addScaledVector(offset, next / now);
+  if (Math.abs(zoom.target - next) < 0.01) zoom.target = null;
+}
+const _zv = new THREE.Vector3();
+
 // The camera may not dip under the grass, through the hills, or into the
 // waterfall cliff. Same surface the ground mesh uses (hills + rim fold),
 // plus a bump for the west cliff rocks, which heightAt() knows nothing about.
@@ -165,27 +214,37 @@ function keepCameraAboveGround() {
 // ------------------------------------------------------------------ light
 const hemiLight = new THREE.HemisphereLight(0x8a86c9, 0x2e4a3f, 0.85);
 scene.add(hemiLight);
-scene.add(new THREE.AmbientLight(0x4a4670, 0.4)); // lift the shadows into soft purple instead of black
+const ambientLight = new THREE.AmbientLight(0x4a4670, 0.4); // lift the shadows into soft purple instead of black
+scene.add(ambientLight);
 const moonLight = new THREE.DirectionalLight(0xb8c4ff, 0.55);
 moonLight.position.set(-70, 90, -40);
 scene.add(moonLight);
 
-// twilight sky dome
+// sky dome — one set of vertex colours per mood (top, horizon, below); the mood
+// cross-fade blends between them
+const SKY = {
+  limbo: [0x1f2350, 0x9a86d4, 0x35305e], // twilight
+  cozy: [0x7d78c4, 0xffc6a2, 0xb393b8],  // golden hour: periwinkle above, peach at the horizon
+};
+const skyCols = {};
+let skyGeo;
 {
   const geo = new THREE.SphereGeometry(520, 24, 14);
   const pos = geo.attributes.position;
-  const colors = [];
-  const top = new THREE.Color(0x1f2350);
-  const horizon = new THREE.Color(0x9a86d4);
-  const below = new THREE.Color(0x35305e);
   const c = new THREE.Color();
-  for (let i = 0; i < pos.count; i++) {
-    const t = pos.getY(i) / 520; // -1..1
-    if (t >= 0) c.copy(horizon).lerp(top, easeInOut(Math.min(1, t * 1.6)));
-    else c.copy(horizon).lerp(below, easeInOut(Math.min(1, -t * 2.2)));
-    colors.push(c.r, c.g, c.b);
+  for (const [name, [topHex, horizonHex, belowHex]] of Object.entries(SKY)) {
+    const top = new THREE.Color(topHex), horizon = new THREE.Color(horizonHex), below = new THREE.Color(belowHex);
+    const colors = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      const t = pos.getY(i) / 520; // -1..1
+      if (t >= 0) c.copy(horizon).lerp(top, easeInOut(Math.min(1, t * 1.6)));
+      else c.copy(horizon).lerp(below, easeInOut(Math.min(1, -t * 2.2)));
+      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+    }
+    skyCols[name] = colors;
   }
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(skyCols.limbo.slice(), 3));
+  skyGeo = geo;
   scene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false })));
 }
 
@@ -212,7 +271,8 @@ let starsMat;
   scene.add(new THREE.Points(geo, starsMat));
 }
 
-// soft moon
+// soft moon (it warms into a low sun in the cozy mood)
+let moonSprite;
 {
   const cv = document.createElement('canvas');
   cv.width = cv.height = 128;
@@ -227,6 +287,7 @@ let starsMat;
   sprite.scale.setScalar(90);
   sprite.position.set(-260, 190, -260);
   scene.add(sprite);
+  moonSprite = sprite;
 }
 
 // ------------------------------------------------------------------ ground
@@ -814,8 +875,9 @@ function scatterSpot(minRiverDist, maxR = ISLAND_R - 16) {
 
 // dusky clouds
 const clouds = [];
+let cloudMat;
 {
-  const cloudMat = new THREE.MeshLambertMaterial({ color: 0x8b84b8, transparent: true, opacity: 0.55, flatShading: true });
+  cloudMat = new THREE.MeshLambertMaterial({ color: 0x8b84b8, transparent: true, opacity: 0.55, flatShading: true });
   for (let i = 0; i < 7; i++) {
     const cloud = new THREE.Group();
     const puffs = 3 + Math.floor(worldRng() * 3);
@@ -904,7 +966,7 @@ const RAIN_TOP = 19;      // vertical span, relative to the camera
 const RAIN_BOTTOM = -15;
 const RAIN_SPEED = 30;
 const RAIN_WIND_X = 1.6, RAIN_WIND_Z = 1.1; // a light slant, matching the drifting clouds
-let rainGeo, rainHeads, rainSpeeds;
+let rainGeo, rainHeads, rainSpeeds, rain;
 {
   rainHeads = new Float32Array(RAIN_COUNT * 3);
   rainSpeeds = new Float32Array(RAIN_COUNT);
@@ -916,7 +978,7 @@ let rainGeo, rainHeads, rainSpeeds;
   }
   rainGeo = new THREE.BufferGeometry();
   rainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RAIN_COUNT * 6), 3));
-  const rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
+  rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({
     color: 0xa8b4dd, transparent: true, opacity: 0.34, depthWrite: false,
   }));
   rain.frustumCulled = false; // the box always straddles the camera anyway
@@ -2096,8 +2158,14 @@ const startHintTimer = () => setTimeout(() => $('hint').classList.add('gone'), 9
 if (window.__openerActive) window.addEventListener('meadow:enter', startHintTimer, { once: true });
 else startHintTimer();
 
-// the brand in the top bar replays the opener
-document.querySelector('.brand')?.addEventListener('click', () => window.__meadowOpener?.show());
+// the brand in the top bar replays the opener (mouse, touch, or keyboard)
+{
+  const brand = document.querySelector('.brand');
+  brand?.addEventListener('click', () => window.__meadowOpener?.show());
+  brand?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.__meadowOpener?.show(); }
+  });
+}
 
 // ------------------------------------------------------------ ambient sound
 // A gloomy-but-comforting soundscape, synthesized live (no audio files):
@@ -2154,9 +2222,11 @@ function startSound() {
     lp.type = 'lowpass';
     lp.frequency.value = 170;
     const g = ctx.createGain();
-    for (const [freq, vol] of [[55, 0.05], [55.4, 0.035], [82.41, 0.028]]) {
+    sound.drone = [];
+    for (const [i, vol] of [0.05, 0.035, 0.028].entries()) {
       const osc = ctx.createOscillator();
-      osc.frequency.value = freq;
+      osc.frequency.value = SOUND_MOODS[mood.name].drone[i];
+      sound.drone.push(osc);
       const og = ctx.createGain();
       og.gain.value = vol;
       osc.connect(og).connect(lp);
@@ -2166,18 +2236,12 @@ function startSound() {
     soundLfo(ctx, g.gain, 0.6, 0.18, 13); // quiet — it sits underneath the melody
   }
 
-  // 2. the music box — a short, simple chain of notes in A minor that repeats
-  // forever, soft plucks with long tails and lots of silence between them
-  // (think Minecraft at dusk)
+  // 2. the music box — a short, simple chain of notes that repeats forever, soft plucks
+  // with long tails and lots of silence between them (think Minecraft at dusk).
+  // Each mood has its own phrase; they share one clock, so a switch lands on the beat.
   {
     const NOTE = { E4: 329.63, G4: 392.0, A4: 440.0, B4: 493.88, C5: 523.25, D5: 587.33, E5: 659.25 };
     const STEP = 0.62; // seconds per step
-    const PHRASE = [   // null = rest — the silences matter as much as the notes
-      'A4', null, 'C5', null, 'E5', null, 'D5', 'C5',
-      null, null, 'A4', null, 'G4', null, null, null,
-      'E4', null, 'G4', null, 'A4', null, 'C5', 'B4',
-      null, null, 'A4', null, null, null, null, null,
-    ];
     const pluck = (freq, t) => {
       // soft fundamental + a fainter octave up, for a music-box shimmer
       for (const [mult, vol] of [[1, 0.055], [2, 0.013]]) {
@@ -2196,7 +2260,8 @@ function startSound() {
     let nextT = ctx.currentTime + 2;
     setInterval(() => { // keep a little runway of scheduled notes ahead of playback
       while (nextT < ctx.currentTime + 0.8) {
-        const name = PHRASE[step % PHRASE.length];
+        const phrase = SOUND_MOODS[mood.name].phrase;
+        const name = phrase[step % phrase.length];
         if (name) pluck(NOTE[name], nextT);
         step++;
         nextT += STEP;
@@ -2212,13 +2277,15 @@ function startSound() {
     soundLfo(ctx, bp.frequency, 420, 180, 17);
     const g = ctx.createGain();
     soundLfo(ctx, g.gain, 0.05, 0.03, 11);
+    sound.wind = ctx.createGain(); // the mood's share of the wind
+    sound.wind.gain.value = SOUND_MOODS[mood.name].wind;
     noiseSrc().connect(bp).connect(g);
     if (ctx.createStereoPanner) {
       const pan = ctx.createStereoPanner();
       soundLfo(ctx, pan.pan, 0, 0.55, 29);
-      g.connect(pan).connect(master);
+      g.connect(pan).connect(sound.wind).connect(master);
     } else {
-      g.connect(master);
+      g.connect(sound.wind).connect(master);
     }
   }
 
@@ -2232,7 +2299,9 @@ function startSound() {
     lp.frequency.value = 8000;
     const g = ctx.createGain();
     soundLfo(ctx, g.gain, 0.033, 0.012, 7);
-    noiseSrc().connect(hp).connect(lp).connect(g).connect(master);
+    sound.rain = ctx.createGain(); // no drizzle in the cozy mood
+    sound.rain.gain.value = SOUND_MOODS[mood.name].rain;
+    noiseSrc().connect(hp).connect(lp).connect(g).connect(sound.rain).connect(master);
   }
 
   applyMute(true);
@@ -2265,10 +2334,131 @@ $('btn-sound').addEventListener('click', () => {
 });
 applyMute(); // set the initial speaker icon
 
+// ------------------------------------------------------------------- mood
+// Two moods for the same meadow: limbo — the wet, sad dusk (the default) — and cozy,
+// a calm, dreamlike golden hour with no rain. Every value that differs lives in
+// MOODS; the world cross-fades between them over MOOD_FADE_S seconds, and your
+// choice is remembered. It only touches the meadow (the opener keeps its own look).
+const MOOD_KEY = 'meadow-mood';
+const MOOD_FADE_S = 2.2;
+const C = (hex) => new THREE.Color(hex);
+const MOODS = {
+  limbo: {
+    fogBright: C(0x565080), fogDeep: C(0x444069), fogNear: 130, fogFar: 420,
+    hemiSky: C(0x8a86c9), hemiGround: C(0x2e4a3f), hemi: 0.85,
+    ambient: C(0x4a4670), ambientI: 0.4,
+    sun: C(0xb8c4ff), sunI: 0.55,
+    disc: C(0xffffff), discScale: 90, discY: 190,
+    cloud: C(0x8b84b8), cloudOpacity: 0.55,
+    stars: 1, rain: 1,
+  },
+  cozy: {
+    fogBright: C(0xe3b9b2), fogDeep: C(0xd2a7b0), fogNear: 150, fogFar: 480,
+    hemiSky: C(0xffe2c8), hemiGround: C(0x7a6a52), hemi: 1.55,
+    ambient: C(0xb08a8c), ambientI: 0.6,
+    sun: C(0xffc98a), sunI: 1.5,
+    disc: C(0xffc98f), discScale: 140, discY: 70, // a big, low golden sun
+    cloud: C(0xffd5c6), cloudOpacity: 0.72,
+    stars: 0.12, rain: 0,
+  },
+};
+const SOUND_MOODS = {
+  limbo: { // A minor over an A drone
+    drone: [55, 55.4, 82.41], wind: 1, rain: 1,
+    phrase: [ // null = rest — the silences matter as much as the notes
+      'A4', null, 'C5', null, 'E5', null, 'D5', 'C5',
+      null, null, 'A4', null, 'G4', null, null, null,
+      'E4', null, 'G4', null, 'A4', null, 'C5', 'B4',
+      null, null, 'A4', null, null, null, null, null,
+    ],
+  },
+  cozy: { // the same notes leaning on C major, over a C drone — the same box, just warmer
+    drone: [65.41, 65.8, 98.0], wind: 0.55, rain: 0,
+    phrase: [
+      'E5', null, 'C5', null, 'G4', null, 'A4', 'C5',
+      null, null, 'D5', null, 'E5', null, null, null,
+      'C5', null, 'G4', null, 'E4', null, 'G4', 'A4',
+      null, null, 'C5', null, null, null, null, null,
+    ],
+  },
+};
+
+let savedMood = null;
+try { savedMood = localStorage.getItem(MOOD_KEY); } catch { /* private mode */ }
+const mood = {
+  name: savedMood === 'cozy' ? 'cozy' : 'limbo',
+  k: savedMood === 'cozy' ? 1 : 0, // 0 = limbo, 1 = cozy; eased toward the target each frame
+  shown: -1,                       // the k the sky was last painted at
+};
+// the blended values for this frame
+const MOOD_COLORS = ['fogBright', 'fogDeep', 'hemiSky', 'hemiGround', 'ambient', 'sun', 'disc', 'cloud'];
+const moodNow = Object.fromEntries(MOOD_COLORS.map((key) => [key, new THREE.Color()]));
+
+function updateMood(rawDt) {
+  const target = mood.name === 'cozy' ? 1 : 0;
+  if (mood.k !== target) {
+    const stepK = rawDt / MOOD_FADE_S;
+    mood.k = target > mood.k ? Math.min(target, mood.k + stepK) : Math.max(target, mood.k - stepK);
+  }
+  const e = easeInOut(mood.k);
+  const a = MOODS.limbo, b = MOODS.cozy, mix = (x, y) => x + (y - x) * e;
+  for (const key of MOOD_COLORS) moodNow[key].lerpColors(a[key], b[key], e);
+  moodNow.hemi = mix(a.hemi, b.hemi);
+  moodNow.sunI = mix(a.sunI, b.sunI);
+  moodNow.stars = mix(a.stars, b.stars);
+  scene.fog.near = mix(a.fogNear, b.fogNear);
+  scene.fog.far = mix(a.fogFar, b.fogFar);
+  hemiLight.color.copy(moodNow.hemiSky);
+  hemiLight.groundColor.copy(moodNow.hemiGround);
+  ambientLight.color.copy(moodNow.ambient);
+  ambientLight.intensity = mix(a.ambientI, b.ambientI);
+  moonLight.color.copy(moodNow.sun);
+  moonSprite.material.color.copy(moodNow.disc);
+  moonSprite.scale.setScalar(mix(a.discScale, b.discScale));
+  moonSprite.position.y = mix(a.discY, b.discY);
+  cloudMat.color.copy(moodNow.cloud);
+  cloudMat.opacity = mix(a.cloudOpacity, b.cloudOpacity);
+  const rainK = mix(a.rain, b.rain);
+  rain.material.opacity = 0.34 * rainK;
+  rain.visible = rainK > 0.01;
+  if (mood.shown !== mood.k) { // repaint the sky only while it is changing
+    const col = skyGeo.attributes.color.array, from = skyCols.limbo, to = skyCols.cozy;
+    for (let i = 0; i < col.length; i++) col[i] = from[i] + (to[i] - from[i]) * e;
+    skyGeo.attributes.color.needsUpdate = true;
+    mood.shown = mood.k;
+  }
+}
+
+function applySoundMood() {
+  if (!sound.ctx) return;
+  const s = SOUND_MOODS[mood.name], t = sound.ctx.currentTime, glide = MOOD_FADE_S / 3;
+  sound.drone.forEach((osc, i) => osc.frequency.setTargetAtTime(s.drone[i], t, glide));
+  sound.wind.gain.setTargetAtTime(s.wind, t, glide);
+  sound.rain.gain.setTargetAtTime(s.rain, t, glide);
+}
+
+function paintMoodButton() {
+  const cozy = mood.name === 'cozy';
+  document.documentElement.dataset.mood = mood.name;
+  const btn = $('btn-mood');
+  btn.setAttribute('aria-checked', cozy ? 'true' : 'false');
+  btn.title = cozy ? 'mood: cozy — switch to limbo' : 'mood: limbo — switch to cozy';
+  btn.querySelector('.mood-knob').textContent = cozy ? '☀️' : '🌧';
+  btn.querySelector('.mood-label').textContent = cozy ? 'cozy' : 'limbo';
+}
+
+function setMood(name) {
+  mood.name = name;
+  try { localStorage.setItem(MOOD_KEY, name); } catch { /* private mode: it just won't be remembered */ }
+  paintMoodButton();
+  applySoundMood();
+}
+$('btn-mood').addEventListener('click', () => setMood(mood.name === 'cozy' ? 'limbo' : 'cozy'));
+paintMoodButton();
+updateMood(0); // paint the saved mood straight away, no fade on load
+
 // ------------------------------------------------------------------- loop
 const clock = new THREE.Clock();
-const FOG_BRIGHT = new THREE.Color(0x565080);
-const FOG_DEEP = new THREE.Color(0x444069);
 window.addEventListener('pointerdown', (e) => {
   if (e.target.closest?.('#opener')) return; // the "Enter the meadow" click shouldn't skip the descent it starts
   if (intro.active) intro.t = intro.dur; // a tap skips the fly-in
@@ -2299,11 +2489,12 @@ function animate() {
   controls.target.x = THREE.MathUtils.clamp(controls.target.x, -panLim, panLim);
   controls.target.z = THREE.MathUtils.clamp(controls.target.z, -panLim, panLim);
   if (!focus.rec) controls.target.y += (0 - controls.target.y) * Math.min(1, rawDt * 3); // glide back to ground level
+  updateZoom(rawDt);
   controls.update();
   updateFocus(rawDt);
   keepCameraAboveGround();
   updateChips();
-  updateRain(dt);
+  if (rain.visible) updateRain(dt);
 
   // flowing water
   waterMat.map.offset.x -= dt * 0.3;
@@ -2341,13 +2532,14 @@ function animate() {
   }
 
   // the dusk breathes — an 8-minute drift so the world never feels frozen
+  updateMood(rawDt);
   {
     const breath = Math.sin(elapsed * ((Math.PI * 2) / 480));
-    moonLight.intensity = 0.55 + breath * 0.12;
-    hemiLight.intensity = 0.85 + breath * 0.07;
-    scene.fog.color.lerpColors(FOG_BRIGHT, FOG_DEEP, (1 - breath) * 0.5);
-    // stars twinkle softly, brighter when the dusk deepens
-    starsMat.opacity = 0.72 - breath * 0.08 + Math.sin(elapsed * 0.8) * 0.14;
+    moonLight.intensity = moodNow.sunI + breath * 0.12;
+    hemiLight.intensity = moodNow.hemi + breath * 0.07;
+    scene.fog.color.lerpColors(moodNow.fogBright, moodNow.fogDeep, (1 - breath) * 0.5);
+    // stars twinkle softly, brighter when the dusk deepens (and fade out in the golden hour)
+    starsMat.opacity = (0.72 - breath * 0.08 + Math.sin(elapsed * 0.8) * 0.14) * moodNow.stars;
   }
 
   for (const cloud of clouds) {
@@ -2378,4 +2570,4 @@ poll().finally(() => {
 animate();
 
 // debug/dev handle (also handy in the console for the curious)
-window.__meadow = { camera, controls, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };
+window.__meadow = { camera, controls, mood, setMood, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };

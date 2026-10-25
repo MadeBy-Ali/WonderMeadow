@@ -232,6 +232,14 @@ wandering wind, rain patter) is
 synthesized live with the Web Audio API — no audio files — and starts on the
 first tap; the 🔊 button in the top bar mutes it, and the choice is remembered.
 
+**Two moods.** The switch next to 🔊 flips the meadow between *limbo* (the wet,
+sad dusk above — the default) and *cozy*: a calm, dreamlike golden hour with a
+peach-and-periwinkle sky, a big low sun, warm light, no rain, and the music box
+leaning into C major over a softer wind. The world cross-fades over ~2 seconds,
+and your choice is remembered. Only the meadow changes — the opener keeps its own
+look. Every value that differs lives in the `MOODS` / `SOUND_MOODS` tables in
+[`public/main.js`](public/main.js).
+
 The wanderers roam slowly and have little lives: between strolls they randomly
 visit activity spots — warming up at the campfire, tending the crops, fishing
 off the dock, gazing from the bridge, or stargazing — then move on to something

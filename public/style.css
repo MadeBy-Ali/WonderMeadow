@@ -91,6 +91,33 @@ html, body {
 .btn-small { padding: 6px 14px; font-size: 0.8rem; box-shadow: none; background: var(--green); color: #fff; }
 .btn-icon { padding: 12px 14px; line-height: 1; }
 .btn.wide { width: 100%; margin-top: 12px; }
+
+/* mood switch: a little pill whose knob slides from rain to sun */
+.btn-mood { display: flex; align-items: center; gap: 8px; padding: 8px 14px 8px 8px; }
+.mood-track {
+  position: relative;
+  width: 46px; height: 26px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #3f4478, #7c76b8);
+  box-shadow: inset 0 1px 3px rgba(20, 16, 50, 0.35);
+  transition: background 0.8s ease;
+}
+.mood-knob {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  display: grid; place-items: center;
+  font-size: 11px; line-height: 1;
+  box-shadow: 0 1px 4px rgba(20, 16, 50, 0.3);
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.mood-label { min-width: 2.6em; text-align: left; font-size: 0.9rem; }
+html[data-mood="cozy"] .mood-track { background: linear-gradient(90deg, #ffd3a8, #f39a78); }
+html[data-mood="cozy"] .mood-knob { transform: translateX(20px); }
+html[data-mood="cozy"] body { background: #d9a7a6; }
+html[data-mood="cozy"] .loading { background: linear-gradient(#8f86c8, #f2bf9f); }
 .btn:disabled { opacity: 0.55; cursor: wait; transform: none; }
 
 /* ---------- floating hint ---------- */
@@ -502,6 +529,8 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
   .topbar-actions { width: 100%; justify-content: stretch; }
   .topbar-actions .btn { flex: 1; padding: 12px 10px; font-size: 0.85rem; }
   .topbar-actions .btn-icon { flex: 0 0 auto; }
+  .topbar-actions .btn-mood { flex: 0 0 auto; padding: 8px; }
+  .mood-label { display: none; }
   .overlay { place-items: end center; padding: 0; }
   .card {
     width: 100%;
@@ -631,4 +660,44 @@ html.opener-on #opener { display: block; }
 @media (prefers-reduced-motion: reduce) {
   .op-drift, .op-grain { animation: none; }
 }
-.brand { cursor: pointer; } /* clicking it replays the opener */
+/* the brand replays the opener: a slow, subtle golden "breath" says it's clickable.
+   Two separate glow layers (::after breathes, ::before answers hover) so switching
+   between them never jumps — each one only ever fades its own opacity. */
+.brand {
+  position: relative;
+  cursor: pointer;
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.brand::before,
+.brand::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+}
+.brand::after {                     /* the breath: a thin golden edge + a soft warm glow */
+  box-shadow:
+    inset 0 0 0 1.5px rgba(246, 185, 59, 0.6),
+    0 0 22px 4px rgba(255, 210, 110, 0.7);
+  animation: brand-breathe 4.5s ease-in-out infinite;
+}
+.brand::before {                    /* hover / keyboard focus: a touch brighter */
+  box-shadow:
+    inset 0 0 0 1.5px rgba(246, 185, 59, 0.85),
+    0 0 30px 6px rgba(255, 205, 100, 0.85);
+  transition: opacity 0.35s ease;
+}
+@keyframes brand-breathe {
+  0%, 100% { opacity: 0; }
+  50%      { opacity: 0.85; }
+}
+.brand:hover, .brand:focus-visible { transform: translateY(-1px); outline: none; }
+.brand:hover::before, .brand:focus-visible::before { opacity: 1; }
+.brand:active { transform: translateY(0) scale(0.985); }
+@media (prefers-reduced-motion: reduce) { .brand::after { animation: none; } }
+
+/* replaying the opener from the meadow: start transparent + blurred, then the
+   normal #opener transition fades and sharpens it in */
+#opener.entering { opacity: 0; filter: blur(14px); transition: none; }
