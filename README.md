@@ -2,8 +2,9 @@
 
 A gloomy-but-comforting floating island at twilight, where anonymous questions
 wander around as little bald people with a `?` over their heads — until a kind
-stranger taps them and answers. When answered, they glow gold and ascend into
-the blue-purple sky. ✨
+stranger taps them and answers. Answers *ripen*: a question keeps wandering,
+growing brighter, until a few strangers have helped — then it glows gold and
+ascends into the blue-purple sky. ✨
 
 No accounts, no logins. Askers get a **one-time code** to retrieve their answer later.
 
@@ -23,17 +24,63 @@ rotate, two fingers to pan/zoom, tap a wanderer to answer).
 ## How it works
 
 - **Ask** — type a question, receive a code like `K3QF-9WMA`. That code is the
-  *only* way to find your answer, and it works *once*. (Checking before anyone
-  has answered does **not** consume it — it's only burned when it actually
-  delivers an answer.)
-- **Wander** — every open question is a little blocky 3D person strolling the
+  *only* way to find your answers, and it works *once*. (Checking before the
+  answers are ready does **not** consume it — it's only burned when it actually
+  delivers them.)
+- **Wander** — every live question is a little blocky 3D person strolling the
   meadow, bobbing `?` overhead. When asking you pick their colour (feminine
   pink or masculine blue) and their mood (a smiling or frowning face).
 - **Answer** — tap/click a wanderer, enter an alias (required, never blank) and
-  an answer. The first answer closes the question: the person glows, sparkles,
-  and lifts off into the sky.
-- **Retrieve** — "I have a code" → paste your code → read your answer. The code
-  is then retired forever.
+  an answer. Your answer is *added* to the question — it doesn't close it on its
+  own — and you can answer a given wanderer only once.
+- **Ripen** — a question with answers keeps wandering, a little brighter with
+  each one. After **3 answers**, or **24 hours** after the first, it closes: the
+  person glows gold and lifts off into the sky. (Details in *Ripening* below.)
+- **Retrieve** — "I have a code" → paste your code. While your question is still
+  ripening you see how many answers have arrived and when it closes; once it has
+  closed you read **all** the answers at once, and the code is retired forever.
+
+## Ripening
+
+One careless answer shouldn't be able to close a sincere question, so a question
+collects several answers before it ascends.
+
+| State | Meaning | The wanderer |
+|---|---|---|
+| **open** | no answers yet | wanders with a `?` |
+| **ripening** | 1 or more answers, not closed yet | keeps wandering, brighter with each answer |
+| **closed** | the answer cap was reached, or the window ran out | glows gold and ascends |
+
+A question **closes** at `MEADOW_MAX_ANSWERS` answers (default **3**), or
+`MEADOW_RIPEN_MINUTES` after its **first** answer (default **1440** = 24 hours),
+whichever comes first. For a demo, `MEADOW_RIPEN_MINUTES=2` shows the whole life
+cycle in a couple of minutes.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MEADOW_MAX_ANSWERS` | answers needed to close a question (whole number ≥ 1) | `3` |
+| `MEADOW_RIPEN_MINUTES` | minutes after the first answer before it closes (fractions allowed) | `1440` |
+| `MEADOW_HASH_SECRET` | secret used to hash "who answered" (see below) | random on every boot |
+
+Empty, zero, negative or non-numeric values fall back to the default.
+
+- **One answer per person per question.** Each answer stores a keyed hash of the
+  visitor's IP address *plus the question's id*. The same person gets the same hash
+  on the same question (so a second answer is refused) but a different hash on every
+  other question, so nobody can be tracked across the meadow — and the IP address
+  itself is never stored. Set `MEADOW_HASH_SECRET` in production: without it a
+  random secret is made at each boot, so the duplicate check forgets everyone on
+  restart. (Postgres also enforces this with a unique index.)
+- **While ripening, answers stay hidden.** The asker's code shows only the count and
+  the closing time and is *not* used up; the answers are delivered, all at once,
+  after the question closes.
+- **Time-outs are enforced twice.** A sweeper closes expired questions every 30
+  seconds, and an answer or lookup that arrives after the deadline closes the
+  question on the spot, so the rule never depends on the timer having run.
+- **Concurrency.** In Postgres the question's row is locked while an answer is
+  added, so strangers racing for the last slot can't push a question past its cap.
+- **Upgrading.** Existing data is converted automatically on first boot (earlier
+  "answered" questions become closed ones, keeping their answers).
 
 ## The meadow keeper (AI)
 
@@ -96,6 +143,7 @@ Everything is dockerized. On the server:
    # POSTGRES_PASSWORD=<openssl rand -hex 24>
    # FLAZ_API_KEY=...        (optional, primary AI provider)
    # ANTHROPIC_API_KEY=...   (optional, fallback AI provider)
+   # MEADOW_HASH_SECRET=<openssl rand -hex 32>   (keeps the one-answer-per-person check across restarts)
    chmod 600 .env
    ```
 3. Bring up Postgres + the app:
@@ -134,22 +182,24 @@ docker compose exec -T db pg_dump -U meadow meadow | gzip > meadow-$(date +%F).s
 **Capacity notes** — in a local loopback test (laptop, 60 open questions) the
 polling endpoint served roughly 12k requests/s at p99 ≈ 25 ms, versus the ~500/s
 that 2,000 simultaneous visitors would generate. That is a local measurement, not a
-production benchmark. Two things keep it that way: an index on
-`questions (answered, created_at DESC)` (without it, a large backlog of unanswered
-questions made every poll scan and sort the whole table), and gzip on responses
-(about 7× smaller for a full 60-question list).
+production benchmark, and it was taken before ripening was added. Since then, on a
+100,000-row database with a 40,000-question backlog, the poll query takes about
+0.04 ms and the sweeper about 0.8 ms, because both use partial indexes (live
+questions, recently closed, ripening deadlines) instead of scanning the table —
+without a suitable index, a big backlog of unanswered questions made every poll scan
+and sort the whole table. Responses are gzipped (about 7× smaller for a full
+60-question list).
 
 Local development against real Postgres, and the full command list, are in
 **[RUN.md](RUN.md)**. Plain `npm start` (no `DATABASE_URL`) uses the JSON file —
-handy for hacking on the frontend. Answer writes are atomic in Postgres, so two
-strangers racing to answer the same wanderer can't both win.
+handy for hacking on the frontend.
 
 ## The answered realm
 
-When an asker's one-time code finds an answered question, the screen dissolves
+When an asker's one-time code finds a question that has closed, the screen dissolves
 into a calm place above the clouds: drifting white clouds, a soft golden glow,
 their wanderer floating there — bald as ever, but smiling now, sparkle overhead —
-and the question with its answer set in quiet serif type. The happy sunlit
+and the question with all of its answers set in quiet serif type. The happy sunlit
 meadow peeks from below. One button leads back down to the twilight island.
 
 ## World details
@@ -190,8 +240,9 @@ far apart and each holds only one sitter, so they always sit alone.
 
 - **The opening descent** — the camera starts far above the clouds and glides
   down onto the island over ~5 seconds. Any tap skips it.
-- **Shared ascensions** — when a stranger answers someone else's question,
-  every open browser gets a quiet toast while the wanderer rises.
+- **Shared ascensions** — when someone else's question closes (enough answers,
+  or its window ran out), every open browser gets a quiet toast while the
+  wanderer rises.
 - **The keepsake card** — the code modal offers a 🖼 keepsake: a downloadable
   twilight card with your wanderer, your question, and your one-time code, so
   the code can't be lost to a closed tab.
@@ -208,17 +259,17 @@ let the camera roam free again. The answer card has a minimize button (–)
 that tucks it into a chip at the bottom of the screen, so you can watch
 the wanderer while you think of your answer.
 
-Clients poll `GET /api/questions` every 4 s; answered questions stay in the feed
+Clients poll `GET /api/questions` every 4 s; closed questions stay in the feed
 for 30 s so every open browser gets to watch the ascension.
 
 ### API
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| GET  | `/api/questions` | — | open + recently answered questions |
+| GET  | `/api/questions` | — | live (open + ripening) and recently closed questions. Each item: `id`, `text`, `color`, `expression`, `answerCount`, `closedAt` (`null` while live). `answered` / `answeredAt` are kept for older clients and mean "closed" / `closedAt`. |
 | POST | `/api/questions` | `{text, color?, expression?}` | `color` is `f`/`m`, `expression` is `smile`/`frown`; returns `201 {id, code}`; `400` with a gentle reason if the keeper declines it |
-| POST | `/api/questions/:id/answers` | `{alias, text}` | first answer wins (`409` if someone beat you to it); alias must be non-blank; `400` if the keeper declines it |
-| POST | `/api/lookup` | `{code}` | one-time; only consumed when an answer is returned |
+| POST | `/api/questions/:id/answers` | `{alias, text}` | `201 {ok, count, closed}`; `409` the question has already closed; `400` you already answered it, the alias is blank, or the keeper declined it; `404` unknown question |
+| POST | `/api/lookup` | `{code}` | `200` open → `{answered:false}`; `200` ripening → `{answered:false, ripening:true, count, closesAt}` (answers hidden, code **not** used); `200` closed → `{answered:true, answers:[...]}` and the code is retired; `404` unknown code; `410` already used |
 
 All three `POST` routes are rate-limited per IP and return `429` when exceeded.
 

@@ -22,6 +22,11 @@ const MAX_ANSWERS = Math.max(1, Math.floor(envNumbers('MEADOW_MAX_ANSWERS', 3)))
 const RIPEN_WINDOW_MS = envNumbers('MEADOW_RIPEN_MINUTES', 24 * 60) * 60_000; // env is in minutes
 const RIPEN_SWEEP_MS = 30_000; // how often to look for expired questions
 
+const RULES = { maxAnswers: MAX_ANSWERS, windowMs: RIPEN_WINDOW_MS }; // handed to the store on every call
+
+// Secret for hashing "who answered". Set MEADOW_HASH_SECRET so the same person is still
+// recognised after a restart; without it a random one is made on every boot (fine for dev).
+const HASH_SECRET = process.env.MEADOW_HASH_SECRET || crypto.randomBytes(32).toString('hex');
 
 const MAX_QUESTION_LEN = 280;
 const MAX_ANSWER_LEN = 500;
@@ -42,6 +47,14 @@ function normalizeCode(input) {
 }
 function cleanText(input, maxLen) {
   return String(input || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+
+// Who answered? A keyed hash of (visitor IP + question id):
+//  - the same person gets the same hash on the SAME question, so they can't answer twice
+//  - a different hash on every OTHER question, so nobody can be tracked across the meadow
+//  - the IP itself is never stored
+function authorHashFor(req, questionId) {
+  return crypto.createHmac('sha256', HASH_SECRET).update(`${req.ip}|${questionId}`).digest('hex').slice(0, 32);
 }
 
 function envNumbers(name, fallback){
@@ -142,10 +155,11 @@ app.post('/api/questions/:id/answers', rateLimit(15, 10 * 60_000, 'answers'), as
   try {
     const gate = await ai.screen('answer', text, alias);
     if (!gate.ok) return res.status(400).json({ error: gate.reason });
-    const result = await store.answer(id, { alias, text, createdAt: Date.now() });
-    if (result === 'notfound') return res.status(404).json({ error: 'That little wanderer has left the meadow.' });
-    if (result === 'conflict') return res.status(409).json({ error: 'Someone just answered them — they are already ascending!' });
-    res.status(201).json({ ok: true });
+    const r = await store.answer(id, { alias, text, createdAt: Date.now(), authorHash: authorHashFor(req, id) }, RULES);
+    if (r.status === 'notfound') return res.status(404).json({ error: 'That little wanderer has left the meadow.' });
+    if (r.status === 'closed') return res.status(409).json({ error: 'Someone just helped them — they are already ascending!' });
+    if (r.status === 'duplicate') return res.status(400).json({ error: 'You already answered this wanderer — thank you! 💛' });
+    res.status(201).json({ ok: true, count: r.count, closed: r.closed });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'The meadow stumbled — try again in a moment.' });
@@ -158,12 +172,20 @@ app.post('/api/lookup', rateLimit(30, 10 * 60_000, 'code searches'), async (req,
   if (!code) return res.status(400).json({ error: 'Please enter a code.' });
 
   try {
-    const r = await store.lookup(code);
+    const r = await store.lookup(code, RULES);
     if (r.status === 'notfound') return res.status(404).json({ error: 'No question matches that code. Check for typos?' });
     if (r.status === 'used') return res.status(410).json({ error: 'This code has already been used — it was one-time only.' });
     if (r.status === 'unanswered') {
       // Don't burn the code on a "nothing yet" check.
       return res.json({ id: r.id, answered: false, consumed: false, text: r.text, createdAt: r.createdAt, color: r.color });
+    }
+    if (r.status === 'ripening') {
+      // Answers are arriving but stay hidden until the question closes. Code NOT burned.
+      return res.json({
+        id: r.id, answered: false, ripening: true, consumed: false,
+        text: r.text, createdAt: r.createdAt, color: r.color,
+        count: r.count, closesAt: r.closesAt,
+      });
     }
     res.json({ id: r.id, answered: true, consumed: true, text: r.text, createdAt: r.createdAt, color: r.color, answers: r.answers });
   } catch (e) {
@@ -181,7 +203,7 @@ const RESIDENT_TOPUP_MS = 5 * 60_000;
 async function topUpResidents() {
   try {
     const world = await store.worldList(0, MAX_OPEN_LISTED);
-    const open = world.filter((q) => !q.answered);
+    const open = world.filter((q) => q.closedAt == null); // open + ripening both count as "still wandering"
     let need = RESIDENT_MIN_OPEN - open.length;
     const existing = open.map((q) => q.text);
     while (need-- > 0) {
@@ -213,6 +235,17 @@ async function topUpResidents() {
 store.init().then(() => {
   topUpResidents();
   setInterval(topUpResidents, RESIDENT_TOPUP_MS).unref();
+
+  // every RIPEN_SWEEP_MS: close ripening questions whose window is over, so their wanderers ascend
+  setInterval(async () => {
+    try {
+      const n = await store.closeExpired(RULES);
+      if (n) console.log(`  ${n} ripened question${n > 1 ? 's' : ''} ascended (window over)`);
+    } catch (e) {
+      console.warn('ripening sweep stumbled:', e.message);
+    }
+  }, RIPEN_SWEEP_MS).unref();
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n  Wonder Meadow is growing at:`);
     console.log(`    http://localhost:${PORT}`);
