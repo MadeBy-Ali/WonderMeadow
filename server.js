@@ -108,7 +108,11 @@ app.use(express.static(path.join(__dirname, 'public'), {
 // The living meadow: open questions + very recently answered ones (for the ascension animation).
 app.get('/api/questions', async (req, res) => {
   try {
-    res.json({ questions: await store.worldList(RECENTLY_ANSWERED_MS, MAX_OPEN_LISTED) });
+    // `rules` lets the client show "2 of 3 answers" without hard-coding the numbers
+    res.json({
+      questions: await store.worldList(RECENTLY_ANSWERED_MS, MAX_OPEN_LISTED),
+      rules: { maxAnswers: MAX_ANSWERS, windowMs: RIPEN_WINDOW_MS },
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'The meadow stumbled — try again in a moment.' });
@@ -157,8 +161,8 @@ app.post('/api/questions/:id/answers', rateLimit(15, 10 * 60_000, 'answers'), as
     if (!gate.ok) return res.status(400).json({ error: gate.reason });
     const r = await store.answer(id, { alias, text, createdAt: Date.now(), authorHash: authorHashFor(req, id) }, RULES);
     if (r.status === 'notfound') return res.status(404).json({ error: 'That little wanderer has left the meadow.' });
-    if (r.status === 'closed') return res.status(409).json({ error: 'Someone just helped them — they are already ascending!' });
-    if (r.status === 'duplicate') return res.status(400).json({ error: 'You already answered this wanderer — thank you! 💛' });
+    if (r.status === 'closed') return res.status(409).json({ error: 'Someone just helped them — they are already ascending!', code: 'closed' });
+    if (r.status === 'duplicate') return res.status(400).json({ error: 'You already answered this wanderer — thank you! 💛', code: 'duplicate' });
     res.status(201).json({ ok: true, count: r.count, closed: r.closed });
   } catch (e) {
     console.error(e);

@@ -963,6 +963,32 @@ function makeMarkTexture(char, color) {
 const QUESTION_MARK_TEX = makeMarkTexture('?', '#ff9f43');
 const SPARKLE_TEX = makeMarkTexture('✦', '#f6b93b');
 
+// ---- how a ripening wanderer looks ------------------------------------------
+// Every tunable lives here so the look is easy to restyle (e.g. per mood) later.
+// "ripeness" runs 0..1 = answers so far / answers needed.
+const RIPE = {
+  glow: 0.35,         // body self-glow (in its own colour) at full ripeness; ascension then goes gold
+  haloOpacity: 0.55,  // additive golden halo behind them at full ripeness
+  haloScale: 5.2,     // halo size in world units at full ripeness
+  maxSparks: 5,       // one orbiting ✦ per answer, up to this many
+  pulse: 0.3,         // extra flash when a new answer lands
+};
+const HALO_TEX = (() => {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255,214,110,0.95)');
+  g.addColorStop(0.4, 'rgba(255,190,80,0.35)');
+  g.addColorStop(1, 'rgba(255,180,70,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(cv);
+})();
+
+// what the server says about the rules (updated on every poll)
+const world = { rules: { maxAnswers: 3, windowMs: 24 * 60 * 60 * 1000 } };
+
 // two colours only: feminine pink, masculine blue
 const COLOR_FEMININE = 0xe35aa8;
 const COLOR_MASCULINE = 0x58a8f0;
@@ -999,7 +1025,13 @@ function makePerson(question) {
 
   const group = new THREE.Group();
   const isF = question.color ? question.color === 'f' : seed % 2 === 0;
-  const bodyMat = new THREE.MeshLambertMaterial({ color: isF ? COLOR_FEMININE : COLOR_MASCULINE, transparent: true });
+  const bodyColor = isF ? COLOR_FEMININE : COLOR_MASCULINE;
+  const bodyMat = new THREE.MeshLambertMaterial({
+    color: bodyColor, transparent: true,
+    // glows in its OWN colour as answers arrive (gold would wash pink/blue out to beige);
+    // the gold comes from the halo + sparkles, and from the ascension itself
+    emissive: bodyColor, emissiveIntensity: 0,
+  });
   const faceMat = new THREE.MeshLambertMaterial({ color: 0x3a3630, transparent: true });
 
   // stubby legs
@@ -1086,12 +1118,67 @@ function makePerson(question) {
     bobSeed: rng() * Math.PI * 2,
     spawnT: 0,
     ascending: null,
+    // ripening: answers so far, eased 0..1 look, flash on a new answer, glow right now
+    answerCount: 0, ripe: 0, ripeTarget: 0, ripePulse: 0, glowNow: 0, fxFade: 1,
+    fx: { halo: null, sparks: [] },
     materials: [bodyMat, faceMat, mark.material, blob.material],
     meshes: [head, body, ...arms, ...legs],
   };
   charactersGroup.add(group);
   characters.set(question.id, rec);
+
+  // golden halo behind them (hidden until there is a first answer); taps pass through it
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: HALO_TEX, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, opacity: 0,
+  }));
+  halo.position.y = 1.3;
+  halo.visible = false;
+  halo.renderOrder = -1; // drawn before the body, so it glows BEHIND them instead of washing them out
+  halo.raycast = () => {};
+  group.add(halo);
+  rec.fx.halo = halo;
+  setRipeness(rec, question.answerCount || 0, true);
   return rec;
+}
+
+// ---- ripening visuals -------------------------------------------------------
+// Set how many answers a wanderer has. `instant` skips the easing/flash (first sighting).
+function setRipeness(rec, count, instant = false) {
+  const prev = rec.answerCount;
+  rec.answerCount = count;
+  rec.ripeTarget = Math.min(1, count / Math.max(1, world.rules.maxAnswers));
+  while (rec.fx.sparks.length < Math.min(count, RIPE.maxSparks)) { // one orbiting ✦ per answer
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: SPARKLE_TEX, transparent: true, depthWrite: false }));
+    s.scale.setScalar(0.42);
+    s.raycast = () => {};
+    rec.group.add(s);
+    rec.fx.sparks.push(s);
+  }
+  if (instant) rec.ripe = rec.ripeTarget;
+  else if (count > prev) rec.ripePulse = 1; // a little flash when a new answer lands
+}
+
+// called every frame for every wanderer (including while ascending)
+function updateRipeFx(rec, dt, elapsed) {
+  rec.ripe += (rec.ripeTarget - rec.ripe) * Math.min(1, dt * 2.2);
+  rec.ripePulse = Math.max(0, rec.ripePulse - dt * 1.4);
+  const k = rec.ripe, pulse = rec.ripePulse, fade = rec.fxFade;
+  rec.glowNow = k * RIPE.glow + pulse * RIPE.pulse;
+  if (!rec.ascending) rec.materials[0].emissiveIntensity = rec.glowNow; // body paint (ascension takes over with clones)
+
+  const halo = rec.fx.halo;
+  halo.visible = (k > 0.01 || pulse > 0.01) && fade > 0.01;
+  if (halo.visible) {
+    halo.material.opacity = (RIPE.haloOpacity * k + pulse * 0.35) * fade * (0.85 + 0.15 * Math.sin(elapsed * 2 + rec.bobSeed));
+    halo.scale.setScalar(RIPE.haloScale * (0.8 + 0.4 * k) * (1 + pulse * 0.25));
+  }
+  const n = rec.fx.sparks.length;
+  for (let i = 0; i < n; i++) {
+    const s = rec.fx.sparks[i];
+    const ang = elapsed * 0.9 + (i * Math.PI * 2) / n;
+    s.position.set(Math.cos(ang) * 0.95, 2.15 + Math.sin(elapsed * 1.3 + i * 1.7) * 0.15, Math.sin(ang) * 0.95);
+    s.material.opacity = 0.9 * fade;
+  }
 }
 
 // tuck into a hunched, knees-up sit — or back out of it
@@ -1222,7 +1309,7 @@ function startAscension(rec) {
   releaseSpot(rec);
   rec.spawnT = 1;
   rec.group.scale.setScalar(1); // in case they were answered mid pop-in
-  rec.ascending = { t: 0, baseY: rec.group.position.y };
+  rec.ascending = { t: 0, baseY: rec.group.position.y, glowFrom: rec.glowNow || 0 }; // keep the glow they already have
   const oldMarkMat = rec.mark.material;
   rec.mark.material = new THREE.SpriteMaterial({ map: SPARKLE_TEX, transparent: true, depthWrite: false });
   rec.materials[rec.materials.indexOf(oldMarkMat)] = rec.mark.material;
@@ -1236,7 +1323,7 @@ function startAscension(rec) {
   for (const mesh of rec.meshes) {
     mesh.material = mesh.material.clone();
     mesh.material.emissive = new THREE.Color(0xffc94d);
-    mesh.material.emissiveIntensity = 0;
+    mesh.material.emissiveIntensity = rec.glowNow || 0;
     rec.materials.push(mesh.material);
   }
   rec.glowMats = rec.meshes.map((m) => m.material);
@@ -1267,6 +1354,8 @@ function removeCharacter(rec) {
   // objects (materials, spark burst) get disposed
   if (rec.ascending?.sparks) rec.ascending.sparks.geometry.dispose();
   for (const m of rec.materials) m.dispose?.();
+  rec.fx.halo?.material.dispose();
+  for (const s of rec.fx.sparks) s.material.dispose(); // (shared textures stay)
   characters.delete(rec.id);
 }
 
@@ -1276,6 +1365,9 @@ function updateCharacter(rec, dt, elapsed) {
   // the ? bobs and sways in every state
   rec.mark.position.y = 3.05 + Math.sin(elapsed * 2.4 + rec.bobSeed) * 0.16;
   rec.mark.material.rotation = Math.sin(elapsed * 1.8 + rec.bobSeed) * 0.14;
+
+  // golden glow, halo and orbiting ✦ that grow with every answer
+  updateRipeFx(rec, dt, elapsed);
 
   // occasionally they look up, straight at the camera — as if they can see you
   if (!rec.ascending) {
@@ -1316,7 +1408,7 @@ function updateCharacter(rec, dt, elapsed) {
     a.t += dt;
     const glow = Math.min(1, a.t / 0.7);
     a.light.intensity = glow * a.lightMax;
-    if (rec.glowMats) for (const m of rec.glowMats) m.emissiveIntensity = glow * 0.9;
+    if (rec.glowMats) for (const m of rec.glowMats) m.emissiveIntensity = a.glowFrom + (0.9 - a.glowFrom) * glow;
 
     if (a.sparks) {
       const p = a.sparks.geometry.attributes.position;
@@ -1335,6 +1427,7 @@ function updateCharacter(rec, dt, elapsed) {
       rec.blob.material.opacity = Math.max(0, 0.9 - riseT * 0.8);
       const fade = THREE.MathUtils.clamp((g.position.y - a.baseY - 26) / 18, 0, 1);
       for (const m of rec.materials) m.opacity = 1 - fade;
+      rec.fxFade = 1 - fade; // halo + orbiting sparkles fade out with them
       a.light.intensity = a.lightMax * (1 - fade);
       if (fade >= 1) removeCharacter(rec);
     }
@@ -1515,20 +1608,49 @@ canvas.addEventListener('pointerup', (e) => {
 });
 
 // ---------------------------------------------------------------- syncing
-const locallyAnswered = new Set();
+const locallyAnswered = new Set(); // questions WE just closed (no "someone helped" toast for those)
+
+// which wanderers has this browser already answered? (the server enforces it too; this just
+// saves a pointless round trip and lets the card say so)
+const ANSWERED_KEY = 'meadow-answered-ids';
+function loadAnswered() {
+  try { return new Set(JSON.parse(localStorage.getItem(ANSWERED_KEY) || '[]')); } catch { return new Set(); }
+}
+const hasAnswered = (id) => loadAnswered().has(id);
+function markAnswered(id) {
+  const ids = [...loadAnswered(), id].slice(-200);
+  try { localStorage.setItem(ANSWERED_KEY, JSON.stringify(ids)); } catch { /* private mode: fine */ }
+}
+
+// "●●○" for 2 of 3
+const pips = (n, max) => '●'.repeat(Math.min(n, max)) + '○'.repeat(Math.max(0, max - n));
+// "about 3h 20m" / "12 min" / "under a minute"
+function fmtLeft(ms) {
+  const m = Math.ceil(ms / 60000);
+  if (m < 1) return 'under a minute';
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
 
 async function poll() {
   try {
     const res = await fetch('/api/questions');
     if (!res.ok) return;
-    const { questions } = await res.json();
+    const { questions, rules } = await res.json();
+    if (rules) world.rules = rules;
     const seen = new Set();
     for (const q of questions) {
       seen.add(q.id);
+      // closed = its wanderer ascends (older servers only sent `answered`, which meant the same)
+      const closed = q.closedAt != null || q.answered === true;
       let rec = characters.get(q.id);
-      if (!rec && !q.answered) rec = makePerson(q);
-      if (rec && q.answered && !rec.ascending) {
-        if (!locallyAnswered.has(q.id)) ui.toast('✨ Somewhere in the meadow, a stranger just helped someone');
+      if (!rec && !closed) rec = makePerson(q);
+      if (rec && !closed && !rec.ascending && (q.answerCount || 0) !== rec.answerCount) {
+        setRipeness(rec, q.answerCount || 0); // someone added an answer: glow a little brighter
+      }
+      if (rec && closed && !rec.ascending) {
+        if (!locallyAnswered.has(q.id)) ui.toast('✨ Somewhere in the meadow, a question just ripened and ascended');
         startAscension(rec);
       }
     }
@@ -1571,6 +1693,14 @@ const ui = {
     $('answer-alias').value = localStorage.getItem('meadow-alias') || '';
     $('answer-text').value = '';
     $('answer-count').textContent = '0 / 500';
+    // how ripe are they? and have WE already answered this one?
+    const n = rec.answerCount || 0, max = world.rules.maxAnswers, mine = hasAnswered(rec.id);
+    $('answer-ripen-note').textContent = mine
+      ? "You've already answered this wanderer — thank you 💛"
+      : n === 0
+        ? 'Nobody has answered yet — be the first 🌱'
+        : `${pips(n, max)}  ${n} of ${max} answers so far — add yours 🌱`;
+    $('answer-submit').disabled = mine;
     ui.open('modal-answer');
     setTimeout(() => ($('answer-alias').value ? $('answer-text') : $('answer-alias')).focus(), 50);
   },
@@ -1817,19 +1947,33 @@ $('answer-submit').addEventListener('click', async () => {
     const data = await res.json();
     if (!res.ok) {
       ui.toast(data.error || 'The meadow hiccuped. Try again?');
-      if (res.status === 409 || res.status === 404) {
+      if (data.code === 'duplicate') {
+        markAnswered(rec.id); // the server says we already answered this one
         ui.closeAll();
-        if (res.status === 409) { startAscension(rec); focusOn(rec); }
+      } else if (res.status === 409 || res.status === 404) {
+        ui.closeAll();
+        if (res.status === 409) { startAscension(rec); focusOn(rec); } // it closed while we were typing
         else removeCharacter(rec);
       }
       return;
     }
     localStorage.setItem('meadow-alias', alias);
-    locallyAnswered.add(rec.id);
+    markAnswered(rec.id);
     ui.closeAll();
-    startAscension(rec);
-    focusOn(rec); // stay with them as they rise
-    ui.toast(`Thank you, ${alias} — off they go! ✨`);
+    if (data.closed) {
+      // ours was the answer that filled the last slot: they ascend now
+      locallyAnswered.add(rec.id);
+      startAscension(rec);
+      focusOn(rec); // stay with them as they rise
+      ui.toast(`Thank you, ${alias} — you gave them the last answer they needed! ✨`);
+    } else {
+      // still ripening: they stay in the meadow, a little brighter
+      setRipeness(rec, data.count);
+      const max = world.rules.maxAnswers;
+      ui.toast(data.count === 1
+        ? `Thank you, ${alias} — you're the first to answer. They'll ripen as more strangers help 🌱`
+        : `Thank you, ${alias} — ${data.count} of ${max} answers so far. They ascend when it's complete 🌱`);
+    }
   } catch {
     ui.toast('Could not reach the meadow — check your connection 🌧️');
   } finally {
@@ -1908,6 +2052,20 @@ async function doLookup() {
       box.innerHTML = `<p class="lookup-waiting">😕 ${escapeHtml(data.error || 'Something went wrong.')}</p>`;
       return;
     }
+    if (data.ripening) {
+      // answers are arriving but stay sealed until the question closes; the code is NOT used up
+      const rec = characters.get(data.id);
+      const max = world.rules.maxAnswers;
+      const left = (data.closesAt || 0) - Date.now();
+      box.innerHTML = `
+        <p class="lr-q">“${escapeHtml(data.text)}”</p>
+        <p class="lookup-waiting">🌱 <span class="pips">${pips(data.count, max)}</span> <strong>${data.count}</strong> of ${max} answers have arrived.<br/>
+        They're still ripening — you'll read them all together when they ascend${left > 0 ? `, at the latest in about ${fmtLeft(left)}` : ', any moment now'}.<br/>
+        Your code was <strong>not</strong> used up.</p>
+        ${rec ? '<p class="lookup-waiting">👁 The camera found them — close this window to watch them glow.</p>' : ''}`;
+      if (rec) focusOn(rec);
+      return;
+    }
     if (!data.answered) {
       const rec = characters.get(data.id);
       box.innerHTML = `
@@ -1933,8 +2091,13 @@ function escapeHtml(s) {
   ));
 }
 
-// hide the hint after a while
-setTimeout(() => $('hint').classList.add('gone'), 9000);
+// hide the hint after a while (counted from when you actually see the meadow)
+const startHintTimer = () => setTimeout(() => $('hint').classList.add('gone'), 9000);
+if (window.__openerActive) window.addEventListener('meadow:enter', startHintTimer, { once: true });
+else startHintTimer();
+
+// the brand in the top bar replays the opener
+document.querySelector('.brand')?.addEventListener('click', () => window.__meadowOpener?.show());
 
 // ------------------------------------------------------------ ambient sound
 // A gloomy-but-comforting soundscape, synthesized live (no audio files):
@@ -2106,13 +2269,17 @@ applyMute(); // set the initial speaker icon
 const clock = new THREE.Clock();
 const FOG_BRIGHT = new THREE.Color(0x565080);
 const FOG_DEEP = new THREE.Color(0x444069);
-window.addEventListener('pointerdown', () => {
+window.addEventListener('pointerdown', (e) => {
+  if (e.target.closest?.('#opener')) return; // the "Enter the meadow" click shouldn't skip the descent it starts
   if (intro.active) intro.t = intro.dur; // a tap skips the fly-in
 });
 
 function animate() {
   requestAnimationFrame(animate);
   const rawDt = Math.min(clock.getDelta(), 0.05);
+  // the opener covers everything: don't spend the GPU on a world nobody can see. This also
+  // holds the opening camera descent until you press "Enter the meadow".
+  if (window.__openerActive) return;
   const dt = rawDt * (window.__timeScale ?? 1);
   const elapsed = clock.elapsedTime;
 
@@ -2211,4 +2378,4 @@ poll().finally(() => {
 animate();
 
 // debug/dev handle (also handy in the console for the curious)
-window.__meadow = { camera, controls, characters, ui, startAscension, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };
+window.__meadow = { camera, controls, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };

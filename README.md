@@ -173,6 +173,15 @@ How the compose file is hardened for this:
   needs extra setup (the visitor IP then arrives in `CF-Connecting-IP`, and the
   origin should only accept Cloudflare's IP ranges) — that is **not wired up yet**.
 
+**Releasing a new version** — two steps every time you change code:
+
+1. `docker compose up -d --build` — the image is a snapshot of the code taken at
+   build time; a plain `restart` keeps running the old snapshot.
+2. Bump the `?v=` number on the `style.css`, `opener.js` and `main.js` tags in
+   `public/index.html`. Those files are browser-cached for an hour; `index.html`
+   itself never is, so a new number makes returning visitors fetch the new code
+   instead of running old front-end code against the new server.
+
 **Backups** — the database is the only state worth saving:
 
 ```bash
@@ -238,8 +247,17 @@ far apart and each holds only one sitter, so they always sit alone.
 
 ## Small ceremonies
 
+- **The opener** — on a first visit, a full-screen prelude before the meadow:
+  three big, short phrases on a warm dark-purple gradient, some in white and some
+  in black over a soft lilac glow. Your scroll (wheel, swipe, or arrow keys) drives
+  one smooth motion with chromatic edges when you move fast, and it loops forever;
+  **Enter the meadow** (or Enter / Esc) is always one click away. The words live in
+  [`public/intro.config.js`](public/intro.config.js). It shows once per browser —
+  `?intro=1` forces it, `?intro=0` skips it, and clicking *Wonder Meadow* in the
+  top bar replays it. The 3D world is paused while it's up.
 - **The opening descent** — the camera starts far above the clouds and glides
-  down onto the island over ~5 seconds. Any tap skips it.
+  down onto the island over ~5 seconds (right after the opener, if it showed).
+  Any tap skips it.
 - **Shared ascensions** — when someone else's question closes (enough answers,
   or its window ran out), every open browser gets a quiet toast while the
   wanderer rises.
@@ -266,9 +284,9 @@ for 30 s so every open browser gets to watch the ascension.
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| GET  | `/api/questions` | — | live (open + ripening) and recently closed questions. Each item: `id`, `text`, `color`, `expression`, `answerCount`, `closedAt` (`null` while live). `answered` / `answeredAt` are kept for older clients and mean "closed" / `closedAt`. |
+| GET  | `/api/questions` | — | live (open + ripening) and recently closed questions. Each item: `id`, `text`, `color`, `expression`, `answerCount`, `closedAt` (`null` while live). `answered` / `answeredAt` are kept for older clients and mean "closed" / `closedAt`. The response also carries `rules: {maxAnswers, windowMs}` so the client can show "2 of 3 answers". |
 | POST | `/api/questions` | `{text, color?, expression?}` | `color` is `f`/`m`, `expression` is `smile`/`frown`; returns `201 {id, code}`; `400` with a gentle reason if the keeper declines it |
-| POST | `/api/questions/:id/answers` | `{alias, text}` | `201 {ok, count, closed}`; `409` the question has already closed; `400` you already answered it, the alias is blank, or the keeper declined it; `404` unknown question |
+| POST | `/api/questions/:id/answers` | `{alias, text}` | `201 {ok, count, closed}`; `409` the question has already closed (`code: "closed"`); `400` you already answered it (`code: "duplicate"`), the alias is blank, or the keeper declined it; `404` unknown question |
 | POST | `/api/lookup` | `{code}` | `200` open → `{answered:false}`; `200` ripening → `{answered:false, ripening:true, count, closesAt}` (answers hidden, code **not** used); `200` closed → `{answered:true, answers:[...]}` and the code is retired; `404` unknown code; `410` already used |
 
 All three `POST` routes are rate-limited per IP and return `429` when exceeded.

@@ -5,7 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Wonder Meadow — ask the meadow, anyone may answer</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>" />
-  <link rel="stylesheet" href="style.css" />
+  <!-- ?v= busts the 1-hour browser cache on main.js/opener.js/style.css: bump it on every release -->
+  <link rel="stylesheet" href="style.css?v=3" />
+  <script>
+    // decide BEFORE first paint whether the opener shows (no flash of the meadow first).
+    // First visit only; ?intro=1 forces it, ?intro=0 skips it.
+    (function () {
+      var p = new URLSearchParams(location.search).get('intro'), seen = false;
+      try { seen = localStorage.getItem('meadow-intro-seen') === '1'; } catch (e) {}
+      if (p === '1' || (p !== '0' && !seen)) {
+        document.documentElement.classList.add('opener-on');
+        window.__openerActive = true; // main.js pauses the 3D world until you enter
+      }
+    })();
+  </script>
   <script type="importmap">
     {
       "imports": {
@@ -28,7 +41,7 @@
 
   <!-- top bar -->
   <header class="topbar">
-    <div class="brand">
+    <div class="brand" title="Replay the intro">
       <span class="brand-emoji">🌿</span>
       <div class="brand-text">
         <h1>Wonder Meadow</h1>
@@ -79,13 +92,13 @@
     <div class="card">
       <button class="card-close" data-close>&times;</button>
       <h2>🔑 Your secret code</h2>
-      <p class="muted">This is the <strong>only</strong> way to find your answer later, and it works <strong>one time only</strong>. Screenshot it, tattoo it, whatever works.</p>
+      <p class="muted">This is the <strong>only</strong> way to read your answers later, and it works <strong>one time only</strong>. Screenshot it, tattoo it, whatever works.</p>
       <div class="code-box">
         <span id="code-value">····-····</span>
         <button id="code-copy" class="btn btn-small">copy</button>
         <button id="code-keepsake" class="btn btn-small" title="download a keepsake card with your code">🖼 keepsake</button>
       </div>
-      <p class="muted small">Tip: checking before anyone has answered will <em>not</em> use up your code.</p>
+      <p class="muted small">Tip: strangers' answers <em>ripen</em> — checking before they're ready will <em>not</em> use up your code.</p>
       <button class="btn btn-primary wide" data-close>I saved it, promise 🤞</button>
     </div>
   </div>
@@ -114,11 +127,12 @@
           <p id="answer-question" class="question-text"></p>
         </div>
       </div>
+      <p id="answer-ripen-note" class="ripen-note"></p>
       <input id="answer-alias" class="input" maxlength="24" placeholder="Your alias (required — any name, not blank)" autocomplete="off" />
       <textarea id="answer-text" maxlength="500" rows="4" placeholder="Your kind, wise, or wonderfully weird answer…"></textarea>
       <div class="row-between">
         <span id="answer-count" class="char-count">0 / 500</span>
-        <button id="answer-submit" class="btn btn-primary">Send them to the sky ✨</button>
+        <button id="answer-submit" class="btn btn-primary">Add my answer ✨</button>
       </div>
     </div>
   </div>
@@ -152,7 +166,7 @@
         <p id="heaven-question" class="hc-question"></p>
         <div class="hc-divider"><span>✦</span></div>
         <div id="heaven-answers"></div>
-        <p class="hc-note">Your one-time code has now been used — this answer is yours to keep. 🕊️</p>
+        <p class="hc-note">Your one-time code has now been used — these answers are yours to keep. 🕊️</p>
         <button id="heaven-return" class="hc-return">Return to the meadow 🌿</button>
       </div>
     </div>
@@ -164,6 +178,19 @@
 
   <div id="toast" class="toast hidden"></div>
 
-  <script type="module" src="main.js"></script>
+  <!-- the opener: a scroll-driven prelude on first load (words live in intro.config.js) -->
+  <div id="opener" role="dialog" aria-label="Welcome to Wonder Meadow">
+    <div class="op-drift"></div>
+    <div class="op-glow"></div>
+    <div class="op-sections"></div>
+    <div class="op-grain"></div>
+    <div class="op-hud op-brand">Wonder Meadow</div>
+    <div class="op-hud op-hint">Scroll to drift ↓</div>
+    <div class="op-hud op-count">01 / 03</div>
+    <button class="op-enter" type="button">Enter the meadow →</button>
+  </div>
+
+  <script type="module" src="opener.js?v=3"></script>
+  <script type="module" src="main.js?v=3"></script>
 </body>
 </html>

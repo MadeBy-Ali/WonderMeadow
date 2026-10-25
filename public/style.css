@@ -293,6 +293,16 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
 }
 .lookup-answer .who { font-size: 0.75rem; font-weight: 800; color: var(--green-deep); margin-bottom: 4px; }
 .lookup-waiting { color: var(--ink-soft); }
+.pips { letter-spacing: 0.15em; color: var(--gold); }
+
+/* "2 of 3 answers so far" under the question in the answer card */
+.ripen-note {
+  margin: 12px 0 2px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+#answer-submit:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- the answered realm ---------- */
 .heaven {
@@ -423,6 +433,8 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
 }
 .hc-divider::after { background: linear-gradient(90deg, rgba(201, 162, 75, 0.55), transparent); }
 
+/* several answers now: let them scroll inside the card instead of running off-screen */
+#heaven-answers { max-height: 42vh; overflow-y: auto; padding: 0 6px; scrollbar-width: thin; }
 .heaven-answer { font-size: 1.08rem; line-height: 1.7; }
 .heaven-answer + .heaven-answer { margin-top: 18px; }
 .heaven-answer .ha-alias {
@@ -499,3 +511,124 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
   #code-value { font-size: 1.15rem; }
   .hint { bottom: 10px; font-size: 0.7rem; }
 }
+
+/* ---------- the opener (first-load prelude; see opener.js / intro.config.js) ---------- */
+#opener {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 200;               /* above every meadow layer (highest there is 70) */
+  overflow: hidden;
+  touch-action: none;         /* we drive the scroll ourselves */
+  user-select: none;
+  -webkit-user-select: none;
+  color: #fff;
+  /* soft, warm dark purple */
+  background: radial-gradient(130% 95% at 50% 115%, #5b2f6c 0%, #2b1739 46%, #140b1f 100%);
+  transition: opacity 1.1s ease, filter 1.1s ease;
+}
+html.opener-on #opener { display: block; }
+#opener.leaving { opacity: 0; filter: blur(14px); pointer-events: none; }
+
+/* slow drifting warmth so the background is never quite still */
+.op-drift {
+  position: absolute;
+  inset: -25%;
+  background:
+    radial-gradient(38% 32% at 30% 40%, rgba(158, 86, 178, 0.38), transparent 70%),
+    radial-gradient(34% 30% at 72% 66%, rgba(222, 124, 146, 0.22), transparent 70%);
+  animation: op-drift 18s ease-in-out infinite alternate;
+}
+@keyframes op-drift { to { transform: translate3d(6%, -5%, 0) rotate(9deg); } }
+
+/* the lighter lilac moment behind black words (opacity driven by opener.js) */
+.op-glow {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: radial-gradient(85% 75% at 50% 50%, #eddcf6 0%, #c9a9e3 42%, rgba(120, 70, 150, 0) 100%);
+}
+
+.op-sections { position: absolute; inset: 0; }
+.op-section {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  will-change: transform, opacity, filter;
+}
+.op-words {
+  margin: 0;
+  font-family: "Avenir Next", "Helvetica Neue", system-ui, sans-serif;
+  font-weight: 800;
+  font-size: clamp(2.6rem, 9.5vw, 8.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.045em;
+  text-align: center;
+  /* chromatic edges; --op-glitch grows with scroll speed */
+  text-shadow:
+    var(--op-glitch, 0px) 0 0 rgba(255, 70, 140, 0.55),
+    calc(var(--op-glitch, 0px) * -1) 0 0 rgba(70, 210, 255, 0.55);
+}
+.op-line { display: block; will-change: transform; }
+.op-section[data-tone="light"] .op-words { color: #fff; }
+.op-section[data-tone="dark"] .op-words { color: #0b0812; }
+
+/* film grain for warmth */
+.op-grain {
+  position: absolute;
+  inset: -50%;
+  opacity: 0.09;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: op-grain 0.9s steps(5) infinite;
+}
+@keyframes op-grain {
+  0% { transform: translate(0, 0); } 20% { transform: translate(-4%, 3%); } 40% { transform: translate(3%, -2%); }
+  60% { transform: translate(-2%, -4%); } 80% { transform: translate(4%, 2%); } 100% { transform: translate(0, 0); }
+}
+
+/* igloo-style monospace HUD: white on the purple, black over the lilac moment (.op-lit) */
+.op-hud {
+  position: absolute;
+  font: 600 0.72rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+  pointer-events: none;
+  transition: color 0.45s ease;
+}
+#opener.op-lit .op-hud { color: rgba(11, 8, 18, 0.72); }
+.op-brand { top: max(22px, env(safe-area-inset-top)); left: 22px; }
+.op-hint { bottom: max(22px, env(safe-area-inset-bottom)); left: 22px; }
+.op-count { bottom: max(22px, env(safe-area-inset-bottom)); right: 22px; }
+
+.op-enter {
+  position: absolute;
+  left: 50%;
+  bottom: calc(max(22px, env(safe-area-inset-bottom)) + 44px);
+  transform: translateX(-50%);
+  padding: 14px 28px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: transparent;
+  color: #fff;
+  font: 700 0.95rem/1 "Avenir Next", system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.25s ease, color 0.45s ease, border-color 0.45s ease;
+}
+.op-enter:hover, .op-enter:focus-visible { background: rgba(255, 255, 255, 0.18); outline: none; }
+#opener.op-lit .op-enter { color: #0b0812; border-color: rgba(11, 8, 18, 0.8); }
+#opener.op-lit .op-enter:hover, #opener.op-lit .op-enter:focus-visible { background: rgba(11, 8, 18, 0.08); }
+
+@media (max-width: 620px) {
+  .op-brand { left: 16px; } .op-hint { left: 16px; } .op-count { right: 16px; }
+  .op-enter { padding: 13px 22px; font-size: 0.9rem; white-space: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .op-drift, .op-grain { animation: none; }
+}
+.brand { cursor: pointer; } /* clicking it replays the opener */
