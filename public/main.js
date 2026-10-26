@@ -1702,6 +1702,12 @@ function updateIdle(rawDt) {
   if (idle.hopIn <= 0) idleHop();
 }
 
+// ------------------------------------------------------------ github stars
+// "★ 12" next to the GitHub mark; until the count is known (or if GitHub is unreachable) it just says "Star".
+fetch('/api/stars').then((r) => (r.ok ? r.json() : null)).then((d) => {
+  if (d && Number.isFinite(d.stars)) $('gh-stars').textContent = d.stars.toLocaleString();
+}).catch(() => { /* the plain "Star" label is fine */ });
+
 // ------------------------------------------------------------- interaction
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();

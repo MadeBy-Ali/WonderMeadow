@@ -92,6 +92,12 @@ html, body {
 .btn-icon { padding: 12px 14px; line-height: 1; }
 .btn.wide { width: 100%; margin-top: 12px; }
 
+/* GitHub link with the live star count */
+.btn-github { display: flex; align-items: center; gap: 6px; padding: 11px 14px; text-decoration: none; line-height: 1; }
+.btn-github svg { flex: none; }
+.gh-star { color: var(--gold); font-size: 1rem; }
+.gh-count { font-size: 0.9rem; }
+
 /* mood switch: a little pill whose knob slides from rain to sun */
 .btn-mood { display: flex; align-items: center; gap: 8px; padding: 8px 14px 8px 8px; }
 .mood-track {
@@ -530,6 +536,7 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
   .topbar-actions .btn { flex: 1; padding: 12px 10px; font-size: 0.85rem; }
   .topbar-actions .btn-icon { flex: 0 0 auto; }
   .topbar-actions .btn-mood { flex: 0 0 auto; padding: 8px; }
+  .topbar-actions .btn-github { flex: 0 0 auto; padding: 10px 11px; }
   .mood-label { display: none; }
   .overlay { place-items: end center; padding: 0; }
   .card {

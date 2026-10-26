@@ -132,6 +132,28 @@ app.get('/api/questions', async (req, res) => {
   }
 });
 
+// GitHub stars for the top-bar button. The server asks GitHub (at most once per cache
+// window, however many visitors there are), so visitors' browsers never contact GitHub
+// until they click the link, and GitHub's anonymous rate limit is never an issue.
+const GITHUB_REPO = process.env.GITHUB_REPO || 'MadeBy-Ali/WonderMeadow';
+const STARS_CACHE_MS = 10 * 60_000;
+let starsCache = { stars: null, at: 0 };
+app.get('/api/stars', async (req, res) => {
+  const now = Date.now();
+  if (now - starsCache.at > STARS_CACHE_MS) {
+    starsCache.at = now; // set first: while GitHub is slow or down, we still only try once per window
+    try {
+      const r = await fetch(`https://api.github.com/repos/${GITHUB_REPO}`, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'wonder-meadow' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (r.ok) starsCache.stars = (await r.json()).stargazers_count ?? null;
+    } catch { /* keep the last known count */ }
+  }
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json({ stars: starsCache.stars, repo: GITHUB_REPO });
+});
+
 // Ask: no login, returns the one-time code. The keeper screens it first.
 app.post('/api/questions', rateLimit(6, 10 * 60_000, 'questions'), async (req, res) => {
   const text = cleanText(req.body?.text, MAX_QUESTION_LEN);

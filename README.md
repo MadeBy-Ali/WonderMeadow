@@ -324,6 +324,7 @@ for 30 s so every open browser gets to watch the ascension.
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
 | GET  | `/api/questions` | — | live (open + ripening) and recently closed questions. Each item: `id`, `text`, `color`, `expression`, `answerCount`, `closedAt` (`null` while live). `answered` / `answeredAt` are kept for older clients and mean "closed" / `closedAt`. The response also carries `rules: {maxAnswers, windowMs}` so the client can show "2 of 3 answers". |
+| GET  | `/api/stars` | — | `{stars, repo}` — the GitHub star count behind the top-bar button, fetched by the server and cached for 10 minutes (`stars` is `null` until GitHub has answered once). Repo is `GITHUB_REPO`, default `MadeBy-Ali/WonderMeadow`. |
 | POST | `/api/questions` | `{text, color?, expression?}` | `color` is `f`/`m`, `expression` is `smile`/`frown`; returns `201 {id, code}`; `400` with a gentle reason if the keeper declines it |
 | POST | `/api/questions/:id/answers` | `{alias, text}` | `201 {ok, count, closed}`; `409` the question has already closed (`code: "closed"`); `400` you already answered it (`code: "duplicate"`), the alias is blank, or the keeper declined it; `404` unknown question |
 | POST | `/api/lookup` | `{code}` | `200` open → `{answered:false}`; `200` ripening → `{answered:false, ripening:true, count, closesAt}` (answers hidden, code **not** used); `200` closed → `{answered:true, answers:[...]}` and the code is retired; `404` unknown code; `410` already used |
