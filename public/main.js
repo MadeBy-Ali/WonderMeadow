@@ -6,6 +6,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // ---------------------------------------------------------------- constants
 const ISLAND_R = 120;            // radius of the floating island disc
@@ -1024,6 +1028,8 @@ function makeMarkTexture(char, color) {
 }
 const QUESTION_MARK_TEX = makeMarkTexture('?', '#ff9f43');
 const SPARKLE_TEX = makeMarkTexture('✦', '#f6b93b');
+const COLOR_KEEPER = 0x8b8f99; // the keeper's own wanderer is a quiet grey, with the same golden glow as everyone
+const KEEPER_GLOW = 0.6; // the keeper's wanderer always glows like a mostly-ripe one
 
 // ---- how a ripening wanderer looks ------------------------------------------
 // Every tunable lives here so the look is easy to restyle (e.g. per mood) later.
@@ -1087,7 +1093,7 @@ function makePerson(question) {
 
   const group = new THREE.Group();
   const isF = question.color ? question.color === 'f' : seed % 2 === 0;
-  const bodyColor = isF ? COLOR_FEMININE : COLOR_MASCULINE;
+  const bodyColor = question.keeper ? COLOR_KEEPER : isF ? COLOR_FEMININE : COLOR_MASCULINE;
   const bodyMat = new THREE.MeshLambertMaterial({
     color: bodyColor, transparent: true,
     // glows in its OWN colour as answers arrive (gold would wash pink/blue out to beige);
@@ -1167,6 +1173,7 @@ function makePerson(question) {
     group, mark, blob, rng, headGroup,
     body, legs, arms,
     isFrown: (question.expression || 'smile') === 'frown',
+    keeper: !!question.keeper, // the keeper's own wanderer: it never ripens on a timer and only ascends when the keeper says so
     home: new THREE.Vector3(x, 0, z),
     state: 'idle',
     stateTime: rng() * 3,
@@ -1208,7 +1215,8 @@ function makePerson(question) {
 function setRipeness(rec, count, instant = false) {
   const prev = rec.answerCount;
   rec.answerCount = count;
-  rec.ripeTarget = Math.min(1, count / Math.max(1, world.rules.maxAnswers));
+  // the keeper's wanderer has no answer cap to fill, so it just glows steadily
+  rec.ripeTarget = rec.keeper ? KEEPER_GLOW : Math.min(1, count / Math.max(1, world.rules.maxAnswers));
   while (rec.fx.sparks.length < Math.min(count, RIPE.maxSparks)) { // one orbiting ✦ per answer
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: SPARKLE_TEX, transparent: true, depthWrite: false }));
     s.scale.setScalar(0.42);
@@ -1626,7 +1634,11 @@ function updateFocus(rawDt) {
     controls.target.lerpVectors(tw.fromTarget, desired, k);
     if (tw.t >= tw.dur) focus.tween = null; // hand the orbit back to the user, target keeps following
   } else {
+    // travel WITH them: the camera moves by exactly as much as the target does, so the
+    // angle and zoom you picked stay the same while they stroll (you can still orbit)
+    _fv3.copy(controls.target);
     controls.target.lerp(desired, Math.min(1, rawDt * 4));
+    camera.position.add(_fv3.subVectors(controls.target, _fv3));
   }
 }
 
@@ -1634,6 +1646,60 @@ function updateChips() {
   const anyOverlay = !!document.querySelector('.overlay:not(.hidden)');
   $('min-chip').classList.toggle('hidden', !ui.minimized);
   $('follow-chip').classList.toggle('hidden', !(focus.rec && !anyOverlay && !ui.minimized));
+  const chipText = idle.active ? '✨ Drifting with the wanderers — tap to explore yourself' : '👁 Following a wanderer — tap to stop';
+  if ($('follow-chip').textContent !== chipText) $('follow-chip').textContent = chipText;
+}
+
+// ---------------------------------------------------------------- idle tour
+// Leave the meadow alone for IDLE_START_S seconds without picking anyone and the camera
+// goes visiting on its own: it follows a random wanderer, slowly circling them, and
+// hops to another one every IDLE_HOP_S seconds. Any tap, drag, scroll or key ends the
+// tour (the camera stays with whoever it was visiting; tap empty meadow to roam free).
+const IDLE_START_S = 10;
+const IDLE_HOP_S = 10;
+const idle = { quietFor: 0, active: false, hopIn: 0, rec: null };
+
+function noteActivity() {
+  idle.quietFor = 0;
+  if (idle.active) stopIdle();
+}
+for (const type of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
+  window.addEventListener(type, noteActivity, { capture: true, passive: true });
+}
+
+function stopIdle() {
+  idle.active = false;
+  idle.rec = null;
+  controls.autoRotate = false;
+}
+
+function idleHop() {
+  const pool = [...characters.values()].filter((rec) => !rec.ascending && rec !== idle.rec);
+  if (!pool.length) { idle.hopIn = 2; return; } // nobody (else) around yet — look again soon
+  idle.rec = pool[Math.floor(Math.random() * pool.length)];
+  focusOn(idle.rec);
+  idle.hopIn = IDLE_HOP_S;
+}
+
+function updateIdle(rawDt) {
+  const busy = intro.active || !controls.enabled || ui.minimized || !!document.querySelector('.overlay:not(.hidden)');
+  if (busy) { idle.quietFor = 0; if (idle.active) stopIdle(); return; }
+  if (!idle.active) {
+    if (focus.rec) { idle.quietFor = 0; return; } // you picked someone yourself: leave you be
+    idle.quietFor += rawDt;
+    if (idle.quietFor < IDLE_START_S) return;
+    idle.active = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 0.5; // one slow lap every ~2 minutes
+    idleHop();
+    return;
+  }
+  if (focus.rec !== idle.rec) { // they ascended and faded, or something else took the camera
+    if (!focus.rec) idleHop(); else stopIdle();
+    return;
+  }
+  idle.hopIn -= rawDt;
+  if (idle.hopIn <= 0) idleHop();
 }
 
 // ------------------------------------------------------------- interaction
@@ -1759,6 +1825,8 @@ const ui = {
     const n = rec.answerCount || 0, max = world.rules.maxAnswers, mine = hasAnswered(rec.id);
     $('answer-ripen-note').textContent = mine
       ? "You've already answered this wanderer — thank you 💛"
+      : rec.keeper
+        ? `🩶 This is the keeper's own wanderer — it keeps listening until it hears an answer that truly helps${n ? ` (${n} so far)` : ''} 🌱`
       : n === 0
         ? 'Nobody has answered yet — be the first 🌱'
         : `${pips(n, max)}  ${n} of ${max} answers so far — add yours 🌱`;
@@ -2114,6 +2182,19 @@ async function doLookup() {
       box.innerHTML = `<p class="lookup-waiting">😕 ${escapeHtml(data.error || 'Something went wrong.')}</p>`;
       return;
     }
+    if (data.keeper) {
+      // the keeper's own wanderer: read the answers any time; the code is NOT used up until it ascends
+      const rec = characters.get(data.id);
+      const list = (data.answers || []).map((a) =>
+        `<p class="lookup-waiting">“${escapeHtml(a.text)}” <em>— ${escapeHtml(a.alias)}</em></p>`).join('');
+      box.innerHTML = `
+        <p class="lr-q">“${escapeHtml(data.text)}”</p>
+        <p class="lookup-waiting">🩶 <strong>${(data.answers || []).length}</strong> answer${(data.answers || []).length === 1 ? '' : 's'} so far. This wanderer keeps listening until the keeper lets it ascend.<br/>
+        Your code was <strong>not</strong> used up.</p>${list}
+        ${rec ? '<p class="lookup-waiting">👁 The camera found them — close this window to watch them wander.</p>' : ''}`;
+      if (rec) focusOn(rec);
+      return;
+    }
     if (data.ripening) {
       // answers are arriving but stay sealed until the question closes; the code is NOT used up
       const rec = characters.get(data.id);
@@ -2457,6 +2538,132 @@ $('btn-mood').addEventListener('click', () => setMood(mood.name === 'cozy' ? 'li
 paintMoodButton();
 updateMood(0); // paint the saved mood straight away, no fade on load
 
+// --------------------------------------------------------- post-processing
+// The finishing pass that gives the meadow its dreamy look, applied to the whole
+// frame after it is drawn:
+//   1. bloom — bright things (the sun, lamps, the campfire, fireflies, ripening halos)
+//      glow softly into their surroundings
+//   2. the grade — a per-mood colour grade (limbo: cool, a little washed out; cozy:
+//      warm, soft, lifted shadows), a soft vignette, a hint of colour fringing toward
+//      the edges like an old lens, and a faint film grain
+// ?fx=0 turns it all off (plain rendering), handy for comparing or on a weak device.
+const FX_ON = new URLSearchParams(location.search).get('fx') !== '0';
+const FX_MOODS = {
+  limbo: { bloom: 0.38, shadowTint: [0.93, 0.95, 1.08], lightTint: [0.98, 1.0, 1.04], sat: 0.86, lift: 0.015, vignette: 0.38 },
+  cozy:  { bloom: 0.55, shadowTint: [1.04, 0.96, 1.02], lightTint: [1.06, 1.01, 0.93], sat: 1.04, lift: 0.04, vignette: 0.24 },
+};
+const DreamGradeShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uShadowTint: { value: new THREE.Vector3(1, 1, 1) },
+    uLightTint: { value: new THREE.Vector3(1, 1, 1) },
+    uSat: { value: 1 },
+    uLift: { value: 0 },
+    uVignette: { value: 0.4 },
+    uFringe: { value: 0.012 }, // ~2px at the very corners, none in the middle
+    uGrain: { value: 0.03 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime, uSat, uLift, uVignette, uFringe, uGrain;
+    uniform vec3 uShadowTint, uLightTint;
+    varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main() {
+      vec2 fromCentre = vUv - 0.5;
+      float r2 = dot(fromCentre, fromCentre);
+      // colour fringing: red and blue drift apart a touch, only toward the edges
+      vec2 shift = fromCentre * r2 * uFringe;
+      vec3 col = vec3(
+        texture2D(tDiffuse, vUv + shift).r,
+        texture2D(tDiffuse, vUv).g,
+        texture2D(tDiffuse, vUv - shift).b);
+      // the scene arrives in linear light: turn it into screen colours first (three's own
+      // helper), so everything below works on what you actually see
+      col = sRGBTransferOETF(vec4(max(col, 0.0), 1.0)).rgb;
+      // split-tone grade: shadows and highlights each lean their own way
+      float lum = dot(col, vec3(0.299, 0.587, 0.114));
+      col *= mix(uShadowTint, uLightTint, smoothstep(0.0, 0.8, lum));
+      col = mix(vec3(lum), col, uSat);
+      col = col * (1.0 - uLift) + uLift; // lift the blacks into soft, milky shadows      // soft vignette
+      col *= 1.0 - uVignette * smoothstep(0.12, 0.75, r2 * 2.2);
+      // faint moving grain, strongest in the mid-tones
+      float n = hash(vUv * 1000.0 + fract(uTime) * 97.0) - 0.5;
+      col += n * uGrain * (1.0 - abs(lum - 0.5) * 1.6);
+      gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+    }`,
+};
+
+// Performance notes (GPU time measured at 1700×900 on a Retina-sized canvas): the first
+// version took ~57 ms a frame (≈17 fps); this one ~6 ms. Bloom and multisampling are what
+// cost — the grade itself is nearly free. So: bloom blurs at 1/8 resolution, multisampling
+// only on low-density screens (on Retina the extra pixels already hide the jaggies), the
+// effects render at no more than FX_MAX_PR pixel density, and watchFxSpeed steps down on
+// its own if the frame rate still sags.
+const FX_MAX_PR = 1.25;
+const fx = { composer: null, bloom: null, grade: null, level: 0 };
+function buildFx() {
+  const pr = Math.min(renderer.getPixelRatio(), FX_MAX_PR);
+  const samples = renderer.getPixelRatio() >= 1.5 ? 0 : 2;
+  const target = new THREE.WebGLRenderTarget(innerWidth * pr, innerHeight * pr, { type: THREE.HalfFloatType, samples });
+  fx.composer = new EffectComposer(renderer, target);
+  fx.composer.renderTarget2.samples = 0; // only the scene itself needs smoothing, not every pass after it
+  fx.composer.setPixelRatio(pr);
+  fx.composer.addPass(new RenderPass(scene, camera));
+  fx.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.55, 0.82);
+  const bloomSetSize = fx.bloom.setSize.bind(fx.bloom);
+  fx.bloom.setSize = (w, h) => bloomSetSize(w / 4, h / 4); // a soft blur anyway: 1/8-res is plenty
+  fx.composer.addPass(fx.bloom);
+  // the grade also does the final linear → screen-colour step (one pass instead of two)
+  fx.grade = new ShaderPass(DreamGradeShader);
+  fx.composer.addPass(fx.grade);
+  fx.composer.setSize(innerWidth, innerHeight);
+}
+if (FX_ON) buildFx();
+
+// The safety net for slower devices: if the frame rate stays low, step down — first to
+// plain pixel density, then without bloom, then no effects at all. It only ever steps
+// down (no flicker back and forth), and only counts frames that were actually drawn.
+const fxSpeed = { frames: 0, time: 0, last: 0 };
+function watchFxSpeed(now) {
+  if (!fx.composer || fx.level >= 3) return;
+  const gap = (now - fxSpeed.last) / 1000;
+  fxSpeed.last = now;
+  if (gap <= 0 || gap > 0.25 || document.hidden) return; // paused, hidden, or just resumed
+  fxSpeed.frames++;
+  fxSpeed.time += gap;
+  if (fxSpeed.time < 3) return;
+  const fps = fxSpeed.frames / fxSpeed.time;
+  fxSpeed.frames = 0;
+  fxSpeed.time = 0;
+  if (fps >= 48) return;
+  fx.level++;
+  if (fx.level === 1) { fx.composer.setPixelRatio(0.75); fx.composer.setSize(innerWidth, innerHeight); }
+  else if (fx.level === 2) fx.bloom.enabled = false;
+  else { fx.composer.dispose(); fx.composer = null; }
+  console.info(`[meadow] effects stepped down to level ${fx.level} (${fps.toFixed(0)} fps)`);
+}
+const _fxA = new THREE.Vector3(), _fxB = new THREE.Vector3();
+function renderFrame(elapsed) {
+  watchFxSpeed(performance.now());
+  if (!fx.composer) { renderer.render(scene, camera); return; }
+  const e = easeInOut(mood.k), a = FX_MOODS.limbo, b = FX_MOODS.cozy, mix = (x, y) => x + (y - x) * e;
+  const u = fx.grade.uniforms;
+  u.uShadowTint.value.lerpVectors(_fxA.fromArray(a.shadowTint), _fxB.fromArray(b.shadowTint), e);
+  u.uLightTint.value.lerpVectors(_fxA.fromArray(a.lightTint), _fxB.fromArray(b.lightTint), e);
+  u.uSat.value = mix(a.sat, b.sat);
+  u.uLift.value = mix(a.lift, b.lift);
+  u.uVignette.value = mix(a.vignette, b.vignette);
+  u.uTime.value = reduceMotion ? 0 : elapsed;
+  fx.bloom.strength = mix(a.bloom, b.bloom);
+  fx.composer.render();
+}
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 // ------------------------------------------------------------------- loop
 const clock = new THREE.Clock();
 window.addEventListener('pointerdown', (e) => {
@@ -2490,6 +2697,7 @@ function animate() {
   controls.target.z = THREE.MathUtils.clamp(controls.target.z, -panLim, panLim);
   if (!focus.rec) controls.target.y += (0 - controls.target.y) * Math.min(1, rawDt * 3); // glide back to ground level
   updateZoom(rawDt);
+  updateIdle(rawDt);
   controls.update();
   updateFocus(rawDt);
   keepCameraAboveGround();
@@ -2554,13 +2762,14 @@ function animate() {
 
   for (const rec of [...characters.values()]) updateCharacter(rec, dt, elapsed);
 
-  renderer.render(scene, camera);
+  renderFrame(elapsed);
 }
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  fx.composer?.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ------------------------------------------------------------------ start
@@ -2570,4 +2779,4 @@ poll().finally(() => {
 animate();
 
 // debug/dev handle (also handy in the console for the curious)
-window.__meadow = { camera, controls, mood, setMood, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };
+window.__meadow = { camera, controls, mood, setMood, idle, renderer, fx, scene, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };

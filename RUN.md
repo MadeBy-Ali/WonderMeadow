@@ -24,6 +24,15 @@ Rules: no quotes, no spaces around `=`, comments on their own line.
 | `FLAZ_API_KEY` | AI keeper (primary) | Optional. Tried first. |
 | `ANTHROPIC_API_KEY` | AI keeper (fallback) | Optional. Starts with `sk-ant-`. Used if flaz.id is unavailable (bad token / out of credit / outage). |
 
+Optional extras (all have defaults, see the Ripening section of the README):
+
+| Variable | Notes |
+|---|---|
+| `MEADOW_MAX_ANSWERS` | answers needed to close a question (default `3`) |
+| `MEADOW_RIPEN_MINUTES` | minutes after the first answer before it closes (default `1440`) |
+| `MEADOW_HASH_SECRET` | set it in production so "who answered" survives restarts (`openssl rand -hex 24`) |
+| `MEADOW_KEEPER_ID` / `MEADOW_KEEPER_ASCEND` | your own never-ascending wanderer; set `ASCEND=1` to let it go |
+
 With **neither** AI key set the keeper is off: no moderation, and the "resident"
 wanderers come from a small built-in pool instead of being written by Claude.
 

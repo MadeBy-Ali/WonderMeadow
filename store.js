@@ -61,11 +61,12 @@ function jsonStore() {
 
     async init() {},
 
-    async worldList(recentMs, maxOpen) {
+    async worldList(recentMs, maxOpen, keeperId = null) {
       const now = Date.now();
-      const live = db.questions.filter((q) => q.closedAt == null).slice(-maxOpen);                  // open + ripening
-      const recent = db.questions.filter((q) => q.closedAt != null && now - q.closedAt < recentMs);  // just ascended
-      return [...live, ...recent].map((q) => ({
+      const keeper = db.questions.filter((q) => q.id === keeperId && q.closedAt == null); // never pushed out by the limit
+      const live = db.questions.filter((q) => q.closedAt == null && q.id !== keeperId).slice(-maxOpen); // open + ripening
+      const recent = db.questions.filter((q) => q.closedAt != null && now - q.closedAt < recentMs);   // just ascended
+      return [...live, ...keeper, ...recent].map((q) => ({
         id: q.id, text: q.text,
         answerCount: q.answers.length,
         closedAt: q.closedAt,
@@ -120,6 +121,14 @@ function jsonStore() {
       if (!q) return { status: 'notfound' };
       if (q.codeUsed) return { status: 'used' };
 
+      // the keeper's own wanderer, still wandering: show its answers, keep the code alive
+      if (rules.keeperId && q.id === rules.keeperId && q.closedAt == null) {
+        return {
+          status: 'keeper', id: q.id, text: q.text, createdAt: q.createdAt, color: q.color || 'm',
+          answers: q.answers.map((a) => ({ alias: a.alias, text: a.text, createdAt: a.createdAt })),
+        };
+      }
+
       // window over but the sweeper hasn't run yet? close it now
       if (stateOf(q) === 'ripening' && now >= q.answers[0].createdAt + rules.windowMs) {
         q.closedAt = now;
@@ -153,13 +162,22 @@ function jsonStore() {
     async closeExpired(rules, now = Date.now()) {
       let closed = 0;
       for (const q of db.questions) {
-        if (stateOf(q) === 'ripening' && now >= q.answers[0].createdAt + rules.windowMs) {
+        if (stateOf(q) === 'ripening' && q.id !== rules.keeperId && now >= q.answers[0].createdAt + rules.windowMs) {
           q.closedAt = now;
           closed++;
         }
       }
       if (closed) saveSoon();
       return closed;
+    },
+
+    // Let the keeper's wanderer go. true only the first time.
+    async close(id, now = Date.now()) {
+      const q = db.questions.find((x) => x.id === id);
+      if (!q || q.closedAt != null) return false;
+      q.closedAt = now;
+      saveSoon();
+      return true;
     },
   };
 }
@@ -223,15 +241,19 @@ function pgStore(url) {
       `);
     },
 
-    async worldList(recentMs, maxOpen) {
+    async worldList(recentMs, maxOpen, keeperId = null) {
       const cutoff = Date.now() - recentMs;
+      // the keeper's wanderer is listed on its own line, so the "newest 60" limit can never push it out
       const { rows } = await pool.query(
         `(SELECT id, text, answer_count, closed_at, color, expression FROM questions
-           WHERE closed_at IS NULL ORDER BY created_at DESC LIMIT $1)        -- open + ripening
+           WHERE closed_at IS NULL AND id IS DISTINCT FROM $3::uuid ORDER BY created_at DESC LIMIT $1)
          UNION ALL
          (SELECT id, text, answer_count, closed_at, color, expression FROM questions
-           WHERE closed_at IS NOT NULL AND closed_at > $2)`,                  // just ascended
-        [maxOpen, cutoff]
+           WHERE closed_at IS NULL AND id = $3::uuid)
+         UNION ALL
+         (SELECT id, text, answer_count, closed_at, color, expression FROM questions
+           WHERE closed_at IS NOT NULL AND closed_at > $2)`,
+        [maxOpen, cutoff, keeperId || null]
       );
       return rows.map((r) => {
         const closedAt = r.closed_at === null ? null : Number(r.closed_at);
@@ -325,6 +347,18 @@ function pgStore(url) {
       if (!q) return { status: 'notfound' };
       if (q.code_used) return { status: 'used' };
 
+      // the keeper's own wanderer, still wandering: show its answers, keep the code alive
+      if (rules.keeperId && q.id === rules.keeperId && q.closed_at === null) {
+        const ans = await pool.query(
+          `SELECT alias, text, created_at FROM answers WHERE question_id = $1 ORDER BY created_at ASC`,
+          [q.id]
+        );
+        return {
+          status: 'keeper', id: q.id, text: q.text, createdAt: Number(q.created_at), color: q.color,
+          answers: ans.rows.map((a) => ({ alias: a.alias, text: a.text, createdAt: Number(a.created_at) })),
+        };
+      }
+
       const count = q.answer_count;
       const firstAt = q.first_answer_at === null ? null : Number(q.first_answer_at);
       let closed = q.closed_at !== null;
@@ -364,10 +398,20 @@ function pgStore(url) {
       const r = await pool.query(
         `UPDATE questions SET closed_at = $1::bigint
           WHERE closed_at IS NULL AND first_answer_at IS NOT NULL
-            AND first_answer_at <= $1::bigint - $2::bigint`,
-        [now, rules.windowMs]
+            AND first_answer_at <= $1::bigint - $2::bigint
+            AND ($3::uuid IS NULL OR id <> $3::uuid)`,
+        [now, rules.windowMs, rules.keeperId || null]
       );
       return r.rowCount;
+    },
+
+    // Let the keeper's wanderer go: close it. true only the first time (so the log fires once).
+    async close(id, now = Date.now()) {
+      const r = await pool.query(
+        `UPDATE questions SET closed_at = $2::bigint WHERE id = $1 AND closed_at IS NULL`,
+        [id, now]
+      );
+      return r.rowCount > 0;
     },
 
   };

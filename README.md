@@ -82,6 +82,24 @@ Empty, zero, negative or non-numeric values fall back to the default.
 - **Upgrading.** Existing data is converted automatically on first boot (earlier
   "answered" questions become closed ones, keeping their answers).
 
+### The keeper's own wanderer
+
+One wanderer can belong to the keeper (the site owner) and play by different rules:
+it has **no answer cap and no time window**, so it never ascends by itself. It
+is a quiet grey (everyone else is pink or blue), glows steadily, is always listed in the meadow (the
+newest-60 limit can't push it out), and its code reads the answers so far at any
+time **without being used up**. When you've seen an answer that satisfies you, flip
+the flag and it ascends within 30 seconds (its code then works one last time, like
+any other).
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MEADOW_KEEPER_ID` | the question's id (the uuid) that is yours | none (feature off) |
+| `MEADOW_KEEPER_ASCEND` | `1` lets it ascend; anything else keeps it wandering | off |
+
+Flipping the flag needs no rebuild: set `MEADOW_KEEPER_ASCEND=1` in `.env`, then
+`docker compose up -d`.
+
 ## The meadow keeper (AI)
 
 Give the server an API key and Claude becomes part of the meadow itself:
@@ -240,6 +258,13 @@ and your choice is remembered. Only the meadow changes — the opener keeps its 
 look. Every value that differs lives in the `MOODS` / `SOUND_MOODS` tables in
 [`public/main.js`](public/main.js).
 
+**The dreamy finish.** Every frame goes through a small post-processing stack:
+soft bloom (the sun, lamps, campfire, fireflies and ripening halos glow), a
+per-mood colour grade (limbo cool and washed out, cozy warm with milky shadows),
+a soft vignette, a faint film grain and a hint of lens fringing at the edges.
+Its values live in `FX_MOODS` and `DreamGradeShader`; add `?fx=0` to the URL to
+see the plain render.
+
 The wanderers roam slowly and have little lives: between strolls they randomly
 visit activity spots — warming up at the campfire, tending the crops, fishing
 off the dock, gazing from the bridge, or stargazing — then move on to something
@@ -263,6 +288,12 @@ far apart and each holds only one sitter, so they always sit alone.
   [`public/intro.config.js`](public/intro.config.js). It shows once per browser —
   `?intro=1` forces it, `?intro=0` skips it, and clicking *Wonder Meadow* in the
   top bar replays it. The 3D world is paused while it's up.
+- **Following** — tap a wanderer and the camera flies in, then travels *with* them
+  as they stroll, keeping whatever angle and zoom you've set (you can still orbit).
+- **The idle tour** — leave the meadow alone for 10 seconds without picking anyone and
+  the camera goes visiting by itself: it follows a random wanderer, circling slowly,
+  and hops to another every 10 seconds. Any tap, drag, scroll or key ends the tour.
+  Tune `IDLE_START_S` / `IDLE_HOP_S` in [`public/main.js`](public/main.js).
 - **The opening descent** — the camera starts far above the clouds and glides
   down onto the island over ~5 seconds (right after the opener, if it showed).
   Any tap skips it.

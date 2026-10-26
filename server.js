@@ -22,7 +22,18 @@ const MAX_ANSWERS = Math.max(1, Math.floor(envNumbers('MEADOW_MAX_ANSWERS', 3)))
 const RIPEN_WINDOW_MS = envNumbers('MEADOW_RIPEN_MINUTES', 24 * 60) * 60_000; // env is in minutes
 const RIPEN_SWEEP_MS = 30_000; // how often to look for expired questions
 
-const RULES = { maxAnswers: MAX_ANSWERS, windowMs: RIPEN_WINDOW_MS }; // handed to the store on every call
+
+// ---------- the keeper's own wanderer ----------
+// One wanderer (MEADOW_KEEPER_ID) belongs to the meadow's keeper: no answer cap, no time
+// window. It wanders until MEADOW_KEEPER_ASCEND=1, then ascends on the next sweep.
+const KEEPER_ID = (process.env.MEADOW_KEEPER_ID || '').trim().toLowerCase();
+const KEEPER_ASCEND = process.env.MEADOW_KEEPER_ASCEND === '1';
+// for the keeper's wanderer the store gets rules that can never be reached
+// (int-sized cap so Postgres's ::int accepts it; a window of ~142,000 years)
+const KEEPER_RULES = { maxAnswers: 2_000_000_000, windowMs: 4.5e15 };
+const rulesFor = (id) => (KEEPER_ID && id.toLowerCase() === KEEPER_ID ? KEEPER_RULES : RULES);
+
+const RULES = { maxAnswers: MAX_ANSWERS, windowMs: RIPEN_WINDOW_MS, keeperId: KEEPER_ID }; // handed to the store on every call
 
 // Secret for hashing "who answered". Set MEADOW_HASH_SECRET so the same person is still
 // recognised after a restart; without it a random one is made on every boot (fine for dev).
@@ -109,8 +120,10 @@ app.use(express.static(path.join(__dirname, 'public'), {
 app.get('/api/questions', async (req, res) => {
   try {
     // `rules` lets the client show "2 of 3 answers" without hard-coding the numbers
-    res.json({
-      questions: await store.worldList(RECENTLY_ANSWERED_MS, MAX_OPEN_LISTED),
+    res.json({      
+      questions: (await store.worldList(RECENTLY_ANSWERED_MS, MAX_OPEN_LISTED, KEEPER_ID))
+        .map((q) => (q.id === KEEPER_ID ? { ...q, keeper: true } : q)), // the front end dresses it differently
+      
       rules: { maxAnswers: MAX_ANSWERS, windowMs: RIPEN_WINDOW_MS },
     });
   } catch (e) {
@@ -159,7 +172,8 @@ app.post('/api/questions/:id/answers', rateLimit(15, 10 * 60_000, 'answers'), as
   try {
     const gate = await ai.screen('answer', text, alias);
     if (!gate.ok) return res.status(400).json({ error: gate.reason });
-    const r = await store.answer(id, { alias, text, createdAt: Date.now(), authorHash: authorHashFor(req, id) }, RULES);
+    const r = await store.answer(id, { alias, text, createdAt: Date.now(), authorHash: authorHashFor(req, id) }, rulesFor(id));
+    
     if (r.status === 'notfound') return res.status(404).json({ error: 'That little wanderer has left the meadow.' });
     if (r.status === 'closed') return res.status(409).json({ error: 'Someone just helped them — they are already ascending!', code: 'closed' });
     if (r.status === 'duplicate') return res.status(400).json({ error: 'You already answered this wanderer — thank you! 💛', code: 'duplicate' });
@@ -191,6 +205,15 @@ app.post('/api/lookup', rateLimit(30, 10 * 60_000, 'code searches'), async (req,
         count: r.count, closesAt: r.closesAt,
       });
     }
+
+    if (r.status === 'keeper') {
+      // the keeper's own wanderer: its answers can be read any time, and the code is NOT used up
+      return res.json({
+        id: r.id, answered: false, keeper: true, consumed: false,
+        text: r.text, createdAt: r.createdAt, color: r.color, answers: r.answers,
+      });
+    }
+
     res.json({ id: r.id, answered: true, consumed: true, text: r.text, createdAt: r.createdAt, color: r.color, answers: r.answers });
   } catch (e) {
     console.error(e);
@@ -245,6 +268,9 @@ store.init().then(() => {
     try {
       const n = await store.closeExpired(RULES);
       if (n) console.log(`  ${n} ripened question${n > 1 ? 's' : ''} ascended (window over)`);
+      // the keeper's flag is on: let their wanderer go (close() returns true only the first time)
+      if (KEEPER_ID && KEEPER_ASCEND && await store.close(KEEPER_ID)) console.log("  the keeper's wanderer ascended 🕊️");
+    
     } catch (e) {
       console.warn('ripening sweep stumbled:', e.message);
     }
@@ -257,6 +283,9 @@ store.init().then(() => {
       ? `${+(RIPEN_WINDOW_MS / 3_600_000).toFixed(1)}h`
       : `${+(RIPEN_WINDOW_MS / 60_000).toFixed(2)} min`;
     console.log(`\n  Ripening: closes at ${MAX_ANSWERS} answers or ${windowLabel} after the first answer`);
+    
+    if (KEEPER_ID) console.log(`  Keeper's wanderer: ${KEEPER_ID} — ${KEEPER_ASCEND ? 'ASCENDING (the flag is on)' : 'stays until MEADOW_KEEPER_ASCEND=1'}`);
+    
     const nets = os.networkInterfaces();
     for (const name of Object.keys(nets)) {
       for (const net of nets[name] || []) {
