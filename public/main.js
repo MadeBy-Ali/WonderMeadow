@@ -1767,12 +1767,29 @@ function fmtLeft(ms) {
   return r ? `${h}h ${r}m` : `${h}h`;
 }
 
+// "✦ 3 strangers are here with you" (the server's count includes you). Shows only a real
+// number — if the server doesn't send one, the line stays hidden.
+let shownPresence = null;
+function showPresence(here) {
+  const el = $('presence');
+  if (!Number.isFinite(here) || here < 1 || here === shownPresence) return;
+  shownPresence = here;
+  const others = here - 1;
+  const text = others === 0
+    ? "you're the only one here right now · the meadow keeps you company 🌿"
+    : `✦ ${others} stranger${others === 1 ? ' is' : 's are'} here with you`;
+  el.classList.remove('on'); // fade out, swap the words, fade back in
+  clearTimeout(showPresence.timer);
+  showPresence.timer = setTimeout(() => { el.textContent = text; el.classList.add('on'); }, el.textContent ? 700 : 0);
+}
+
 async function poll() {
   try {
     const res = await fetch('/api/questions');
     if (!res.ok) return;
-    const { questions, rules } = await res.json();
+    const { questions, rules, here } = await res.json();
     if (rules) world.rules = rules;
+    showPresence(here);
     const seen = new Set();
     for (const q of questions) {
       seen.add(q.id);
@@ -2661,6 +2678,8 @@ function renderFrame(elapsed) {
   const u = fx.grade.uniforms;
   u.uShadowTint.value.lerpVectors(_fxA.fromArray(a.shadowTint), _fxB.fromArray(b.shadowTint), e);
   u.uLightTint.value.lerpVectors(_fxA.fromArray(a.lightTint), _fxB.fromArray(b.lightTint), e);
+  u.uLightTint.value.x *= 1 + 0.035 * life.drift; // the slow swell: a touch warmer, then a touch cooler
+  u.uLightTint.value.z *= 1 - 0.035 * life.drift;
   u.uSat.value = mix(a.sat, b.sat);
   u.uLift.value = mix(a.lift, b.lift);
   u.uVignette.value = mix(a.vignette, b.vignette);
@@ -2669,6 +2688,273 @@ function renderFrame(elapsed) {
   fx.composer.render();
 }
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ------------------------------------------------------------- ambient life
+// Small things that happen on their own, so a long stay never looks frozen:
+//   · the light swells slowly over ~20 minutes (the sun drifts, the colours warm and cool)
+//   · limbo: a shooting star now and then
+//   · cozy: a flock of birds crossing, butterflies wandering a patch of meadow
+//   · both: a fish leaps out of the river and leaves ripples
+// Each kind returns at random intervals (AMBIENT_EVERY, in seconds) so it never feels like a
+// loop, only one of each at a time, and none of it runs with "reduce motion" switched on.
+const life = { drift: 0, next: null, active: [] };
+const AMBIENT_EVERY = { star: [35, 80], birds: [50, 110], fish: [18, 45], butterflies: [60, 120] };
+const rnd = (a, b) => a + Math.random() * (b - a);
+const _lv = new THREE.Vector3();
+
+function canvasTex(w, h, draw) {
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  draw(cv.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(cv);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+// a tapered streak, bright head on the right
+const STREAK_TEX = canvasTex(256, 32, (c, w, h) => {
+  const g = c.createLinearGradient(0, 0, w, 0);
+  g.addColorStop(0, 'rgba(255,255,255,0)');
+  g.addColorStop(0.75, 'rgba(255,255,255,0.4)');
+  g.addColorStop(1, 'rgba(255,255,255,1)');
+  c.fillStyle = g;
+  c.beginPath();
+  c.moveTo(0, h / 2); c.lineTo(w - 10, h * 0.28); c.quadraticCurveTo(w, h / 2, w - 10, h * 0.72);
+  c.closePath(); c.fill();
+});
+// a bird seen from far away: two strokes, wings up or wings down
+const BIRD_TEX = [6, 24].map((tipY) => canvasTex(64, 32, (c) => {
+  c.strokeStyle = '#fff'; c.lineWidth = 5; c.lineCap = 'round'; c.lineJoin = 'round';
+  c.beginPath(); c.moveTo(5, tipY); c.quadraticCurveTo(22, 30 - tipY * 0.6, 32, 17);
+  c.quadraticCurveTo(42, 30 - tipY * 0.6, 59, tipY); c.stroke();
+}));
+const BUTTERFLY_TEX = canvasTex(64, 64, (c) => {
+  c.fillStyle = '#fff';
+  for (const s of [-1, 1]) {
+    c.beginPath(); c.ellipse(32 + s * 13, 24, 13, 17, s * 0.5, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.ellipse(32 + s * 10, 42, 9, 12, -s * 0.4, 0, Math.PI * 2); c.fill();
+  }
+  c.fillStyle = 'rgba(40,20,50,0.8)'; c.fillRect(30, 14, 4, 36);
+});
+const PLANE1 = new THREE.PlaneGeometry(1, 1);
+const FISH_BODY = new THREE.SphereGeometry(0.5, 10, 8);
+const FISH_TAIL = new THREE.ConeGeometry(0.2, 0.5, 4).rotateZ(Math.PI / 2); // apex toward -x: behind the fish
+const RIPPLE_GEO = new THREE.RingGeometry(0.3, 0.52, 32).rotateX(-Math.PI / 2);
+
+function spawnStar() {
+  const LEN = 60;
+  _lv.copy(controls.target).sub(camera.position);
+  const pitch = Math.asin(_lv.y / (_lv.length() || 1)); // where the camera is looking, up or down
+  const a = Math.atan2(_lv.z, _lv.x) + rnd(-0.55, 0.55); // somewhere in the view…
+  const e = THREE.MathUtils.clamp(pitch + rnd(0.12, 0.4), 0.12, 0.8); // …in the upper half of it, but always above the horizon
+  const ce = Math.cos(e), se = Math.sin(e);
+  const p = new THREE.Vector3(Math.cos(a) * ce, se, Math.sin(a) * ce).multiplyScalar(455);
+  const east = new THREE.Vector3(-Math.sin(a), 0, Math.cos(a));
+  const upT = new THREE.Vector3(-Math.cos(a) * se, ce, -Math.sin(a) * se);
+  const phi = rnd(0.25, 0.7), side = Math.random() < 0.5 ? 1 : -1; // falls at a slant, either way
+  const d = east.multiplyScalar(side * Math.cos(phi)).addScaledVector(upT, -Math.sin(phi)).normalize();
+  const facing = p.clone().normalize().negate(); // the streak faces the middle of the world
+  const y = new THREE.Vector3().crossVectors(facing, d);
+  const mat = new THREE.MeshBasicMaterial({
+    map: STREAK_TEX, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+    depthWrite: false, fog: false, side: THREE.DoubleSide,
+  });
+  const mesh = new THREE.Mesh(PLANE1, mat);
+  mesh.scale.set(LEN, 2.4, 1);
+  mesh.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(d, y, facing));
+  scene.add(mesh);
+  const dur = rnd(0.9, 1.3), travel = rnd(130, 190);
+  let t = 0;
+  return {
+    update(dt) {
+      t += dt;
+      const s = t / dur;
+      if (s >= 1) return false;
+      mesh.position.copy(p).addScaledVector(d, travel * s - LEN / 2); // head leads, the tail trails behind
+      mat.opacity = Math.pow(Math.sin(Math.PI * s), 0.8);
+      return true;
+    },
+    dispose() { scene.remove(mesh); mat.dispose(); },
+  };
+}
+
+function spawnBirds() {
+  const n = 5 + Math.floor(Math.random() * 3);
+  // they cross the view from side to side, a little ahead of the camera, in the upper part of it
+  _lv.copy(controls.target).sub(camera.position);
+  const pitch = Math.asin(_lv.y / (_lv.length() || 1));
+  _lv.y = 0; _lv.normalize();
+  const ahead = _lv.clone();                              // horizontal direction you're looking
+  const side = new THREE.Vector3(-ahead.z, 0, ahead.x);   // across the view
+  const dir = side.clone().multiplyScalar(Math.random() < 0.5 ? 1 : -1);
+  const dist = rnd(40, 90), speed = rnd(9, 13), reach = 140;
+  const altitude = Math.max(14, camera.position.y + dist * Math.tan(pitch + rnd(0, 0.3)));
+  const start = camera.position.clone().addScaledVector(ahead, dist).addScaledVector(dir, -reach);
+  start.y = altitude;
+  const birds = [];
+  for (let i = 0; i < n; i++) {
+    const rank = Math.ceil(i / 2), sgn = i % 2 ? 1 : -1; // a loose V, leader in front
+    const mat = new THREE.SpriteMaterial({ map: BIRD_TEX[0], color: 0x3d2f45, transparent: true, depthWrite: false, opacity: 0 });
+    const sprite = new THREE.Sprite(mat);
+    sprite.scale.set(3.4, 1.7, 1);
+    sprite.raycast = () => {};
+    scene.add(sprite);
+    birds.push({
+      sprite, mat, phase: Math.random() * 2,
+      off: i ? side.clone().multiplyScalar(sgn * rank * 3.4).addScaledVector(dir, -rank * 3) : new THREE.Vector3(),
+    });
+  }
+  const total = (reach * 2) / speed;
+  let t = 0;
+  return {
+    update(dt) {
+      t += dt;
+      const u = t / total;
+      if (u >= 1) return false;
+      const fade = Math.min(1, u / 0.08, (1 - u) / 0.08);
+      for (const b of birds) {
+        b.sprite.position.copy(start).addScaledVector(dir, speed * t).add(b.off);
+        b.sprite.position.y += Math.sin(t * 1.4 + b.phase * 3) * 0.7;
+        b.mat.map = BIRD_TEX[Math.floor(t * 4.5 + b.phase) % 2]; // flap
+        b.mat.opacity = 0.85 * fade;
+      }
+      return true;
+    },
+    dispose() { for (const b of birds) { scene.remove(b.sprite); b.mat.dispose(); } },
+  };
+}
+
+function makeRipple(x, z) {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xf2f7ff, transparent: true, opacity: 0.85, depthWrite: false });
+  const mesh = new THREE.Mesh(RIPPLE_GEO, mat);
+  mesh.position.set(x, 0.2, z);
+  scene.add(mesh);
+  let t = 0;
+  return {
+    update(dt) {
+      t += dt;
+      const s = t / 1.7;
+      if (s >= 1) return false;
+      mesh.scale.setScalar(1.2 + s * 6.5);
+      mat.opacity = 0.85 * (1 - s) * (1 - s);
+      return true;
+    },
+    dispose() { scene.remove(mesh); mat.dispose(); },
+  };
+}
+
+function spawnFish() {
+  // the river point nearest to where you're looking — if that's close enough to be seen
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < 14; i++) {
+    const t = rnd(0.15, 0.82), p = riverCurve.getPointAt(t);
+    if (Math.hypot(p.x, p.z) > FOLD_START - 6) continue; // not out where the water pours over the edge
+    const d = Math.hypot(p.x - controls.target.x, p.z - controls.target.z);
+    if (d < bestD) { bestD = d; best = { t, p }; }
+  }
+  if (!best || bestD > 70) return null;
+  const tan = riverCurve.getTangentAt(best.t); tan.y = 0; tan.normalize();
+  if (Math.random() < 0.5) tan.negate(); // upstream or down
+  const perp = new THREE.Vector3(-tan.z, 0, tan.x);
+  const from = best.p.clone().addScaledVector(perp, rnd(-1.4, 1.4));
+  const hop = rnd(2.6, 3.8), height = rnd(1.1, 1.8), dur = 0.85;
+  const mat = new THREE.MeshLambertMaterial({ color: 0xc8d6e4, emissive: 0x2b3a4a });
+  const fish = new THREE.Group();
+  const body = new THREE.Mesh(FISH_BODY, mat); body.scale.set(1.1, 0.42, 0.34);
+  const tail = new THREE.Mesh(FISH_TAIL, mat); tail.position.x = -0.62; tail.scale.set(1, 1, 0.5);
+  fish.add(body, tail);
+  fish.scale.setScalar(1.8); // small fish are lost at the camera's usual distance
+  fish.rotation.order = 'YZX';
+  fish.rotation.y = -Math.atan2(tan.z, tan.x); // nose (local +x) along the river
+  fish.visible = false;
+  scene.add(fish);
+  const sub = [makeRipple(from.x, from.z)]; // leaves the water…
+  let t = 0, landed = false;
+  return {
+    update(dt) {
+      t += dt;
+      const s = Math.min(1, t / dur);
+      if (s < 1) {
+        fish.visible = true;
+        fish.position.set(from.x + tan.x * hop * s, 0.14 + 4 * height * s * (1 - s), from.z + tan.z * hop * s);
+        fish.rotation.z = Math.atan2(4 * height * (1 - 2 * s), hop); // nose up on the way out, down on the way in
+      } else if (!landed) {
+        landed = true;
+        fish.visible = false;
+        sub.push(makeRipple(from.x + tan.x * hop, from.z + tan.z * hop)); // …and splashes back in
+      }
+      for (let i = sub.length - 1; i >= 0; i--) if (!sub[i].update(dt)) { sub[i].dispose(); sub.splice(i, 1); }
+      return s < 1 || sub.length > 0;
+    },
+    dispose() { scene.remove(fish); mat.dispose(); for (const r of sub) r.dispose(); },
+  };
+}
+
+function spawnButterflies() {
+  // a patch of meadow near where you're looking
+  let cx = 0, cz = 0, ok = false;
+  for (let i = 0; i < 30 && !ok; i++) {
+    cx = controls.target.x + rnd(-14, 14); cz = controls.target.z + rnd(-14, 14);
+    ok = isWalkable(cx, cz);
+  }
+  if (!ok) return null;
+  const baseY = heightAt(cx, cz) + 1.3;
+  const colors = [0xffb347, 0xff8fb1, 0xa5d8ff, 0xffe27a];
+  const flies = colors.map((color) => {
+    const mat = new THREE.SpriteMaterial({ map: BUTTERFLY_TEX, color, transparent: true, depthWrite: false, opacity: 0 });
+    const sprite = new THREE.Sprite(mat);
+    sprite.raycast = () => {};
+    scene.add(sprite);
+    return { sprite, mat, ph: [0, 1, 2, 3].map(() => Math.random() * 6.28) };
+  });
+  const total = rnd(35, 50);
+  let t = 0;
+  return {
+    update(dt) {
+      t += dt;
+      if (t >= total) return false;
+      const fade = Math.min(1, t / 3, (total - t) / 3) * Math.max(0, (mood.k - 0.3) / 0.7); // they leave if you switch to limbo
+      for (const f of flies) {
+        const [a, b, c, d] = f.ph;
+        f.sprite.position.set(
+          cx + Math.sin(t * 0.7 + a) * 3.6 + Math.sin(t * 1.9 + b) * 0.9,
+          baseY + Math.sin(t * 1.3 + c) * 0.5 + Math.abs(Math.sin(t * 9 + a)) * 0.15,
+          cz + Math.cos(t * 0.6 + d) * 3.6 + Math.cos(t * 2.1 + a) * 0.9
+        );
+        const flap = 0.35 + 0.65 * Math.abs(Math.sin(t * 14 + b));
+        f.sprite.scale.set(1.25 * flap, 1.25, 1);
+        f.mat.opacity = 0.95 * fade;
+      }
+      return true;
+    },
+    dispose() { for (const f of flies) { scene.remove(f.sprite); f.mat.dispose(); } },
+  };
+}
+
+const spawnAmbient = {
+  star: () => (mood.k < 0.5 ? spawnStar() : null),
+  birds: () => (mood.k > 0.5 ? spawnBirds() : null),
+  fish: spawnFish,
+  butterflies: () => (mood.k > 0.5 ? spawnButterflies() : null),
+};
+
+function updateAmbient(dt, elapsed) {
+  life.drift = Math.sin((elapsed * Math.PI * 2) / 1200); // a ~20-minute swell
+  if (reduceMotion) return;
+  if (!life.next) { // first call: stagger the first visits so nothing happens all at once
+    life.next = {};
+    for (const k in AMBIENT_EVERY) life.next[k] = elapsed + rnd(...AMBIENT_EVERY[k]) * 0.6;
+  }
+  for (const kind in AMBIENT_EVERY) {
+    if (elapsed < life.next[kind]) continue;
+    life.next[kind] = elapsed + rnd(...AMBIENT_EVERY[kind]);
+    if (life.active.some((ev) => ev.kind === kind)) continue;
+    const ev = spawnAmbient[kind]();
+    if (ev) { ev.kind = kind; life.active.push(ev); }
+  }
+  for (let i = life.active.length - 1; i >= 0; i--) {
+    if (!life.active[i].update(dt)) { life.active[i].dispose(); life.active.splice(i, 1); }
+  }
+}
 
 // ------------------------------------------------------------------- loop
 const clock = new THREE.Clock();
@@ -2747,6 +3033,9 @@ function animate() {
 
   // the dusk breathes — an 8-minute drift so the world never feels frozen
   updateMood(rawDt);
+  updateAmbient(dt, elapsed);
+  moonSprite.position.x = -260 + life.drift * 70; // the sun / moon drifts a little along the sky
+  moonSprite.position.y += life.drift * 20;
   {
     const breath = Math.sin(elapsed * ((Math.PI * 2) / 480));
     moonLight.intensity = moodNow.sunI + breath * 0.12;
@@ -2785,4 +3074,4 @@ poll().finally(() => {
 animate();
 
 // debug/dev handle (also handy in the console for the curious)
-window.__meadow = { camera, controls, mood, setMood, idle, renderer, fx, scene, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };
+window.__meadow = { camera, controls, mood, setMood, idle, renderer, fx, scene, life, spawnAmbient, characters, ui, startAscension, setRipeness, world, poll, activitySpots, edgeSitSpots, beginEdgeSitTrip, bridges, focus, focusOn, releaseFocus, sound, drawKeepsake, intro };

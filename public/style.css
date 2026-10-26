@@ -146,6 +146,30 @@ html[data-mood="cozy"] .loading { background: linear-gradient(#8f86c8, #f2bf9f);
 }
 .hint.gone { opacity: 0; }
 
+/* "✦ 3 strangers are here with you" — a quiet line in the corner, never in the way */
+.presence {
+  position: fixed;
+  left: 18px;
+  bottom: 16px;
+  z-index: 14;
+  max-width: min(72vw, 360px);
+  color: rgba(246, 242, 255, 0.82);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 8px rgba(20, 16, 50, 0.7);
+  opacity: 0;
+  transition: opacity 1.4s ease;
+  pointer-events: none;
+}
+.presence.on { opacity: 1; }
+html[data-mood="cozy"] .presence { color: rgba(255, 250, 244, 0.95); text-shadow: 0 1px 8px rgba(120, 70, 60, 0.6); }
+@media (max-width: 1000px) {
+  .presence { bottom: 62px; } /* the hint pill is as wide as the corner at this size: sit above it */
+}
+@media (max-width: 620px) {
+  .presence { left: 12px; bottom: 74px; font-size: 0.72rem; } /* clear of the hint and the chips */
+}
+
 /* ---------- modals ---------- */
 .overlay {
   position: fixed;

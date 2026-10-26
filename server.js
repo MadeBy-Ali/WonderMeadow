@@ -116,8 +116,31 @@ app.use(express.static(path.join(__dirname, 'public'), {
   }
 }));
 
+// ---------- presence: "how many strangers are here right now?" ----------
+// The meadow is polled every few seconds by everyone who has it open, so those polls ARE the
+// heartbeat: no extra requests, no accounts. We keep only a keyed hash of each visitor (the
+// IP itself is never stored), in memory only (nothing touches the database), and forget
+// anyone not heard from for PRESENCE_WINDOW_MS. Visitors sharing one network count as one.
+const PRESENCE_WINDOW_MS = 90_000;
+const lastSeen = new Map(); // visitor hash -> timestamp of their latest poll
+function notePresence(req) {
+  const id = crypto.createHmac('sha256', HASH_SECRET).update(`here|${req.ip}`).digest('hex').slice(0, 16);
+  const now = Date.now();
+  lastSeen.set(id, now);
+  return now;
+}
+function countPresence(now) {
+  let here = 0;
+  for (const [id, t] of lastSeen) {
+    if (now - t > PRESENCE_WINDOW_MS) lastSeen.delete(id); // deleting during iteration is safe for a Map
+    else here++;
+  }
+  return here; // includes the visitor who is asking
+}
+
 // The living meadow: open questions + very recently answered ones (for the ascension animation).
 app.get('/api/questions', async (req, res) => {
+  const here = countPresence(notePresence(req));
   try {
     // `rules` lets the client show "2 of 3 answers" without hard-coding the numbers
     res.json({      
@@ -125,6 +148,7 @@ app.get('/api/questions', async (req, res) => {
         .map((q) => (q.id === KEEPER_ID ? { ...q, keeper: true } : q)), // the front end dresses it differently
       
       rules: { maxAnswers: MAX_ANSWERS, windowMs: RIPEN_WINDOW_MS },
+      here, // visitors with the meadow open right now, you included
     });
   } catch (e) {
     console.error(e);

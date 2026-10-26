@@ -294,6 +294,17 @@ far apart and each holds only one sitter, so they always sit alone.
   the camera goes visiting by itself: it follows a random wanderer, circling slowly,
   and hops to another every 10 seconds. Any tap, drag, scroll or key ends the tour.
   Tune `IDLE_START_S` / `IDLE_HOP_S` in [`public/main.js`](public/main.js).
+- **Strangers here with you** — a quiet line in the bottom corner: "✦ 3 strangers are
+  here with you" (or, when it's just you, that the meadow keeps you company). The count
+  is real: the server notes who polled the meadow in the last 90 seconds, using a keyed
+  hash of the visitor (never the IP itself), in memory only — nothing is written to the
+  database. People sharing one network count as one.
+- **Ambient life** — small things that happen on their own, at random intervals, so a
+  long stay never looks frozen: the light swells slowly over ~20 minutes; in *limbo* a
+  shooting star now and then; in *cozy* a flock of birds crosses the sky and butterflies
+  wander a patch of meadow; in both, a fish leaps out of the river and leaves ripples.
+  Intervals live in `AMBIENT_EVERY` in [`public/main.js`](public/main.js); nothing runs
+  with "reduce motion" on.
 - **The opening descent** — the camera starts far above the clouds and glides
   down onto the island over ~5 seconds (right after the opener, if it showed).
   Any tap skips it.
@@ -323,7 +334,7 @@ for 30 s so every open browser gets to watch the ascension.
 
 | Method | Path | Body | Notes |
 |--------|------|------|-------|
-| GET  | `/api/questions` | — | live (open + ripening) and recently closed questions. Each item: `id`, `text`, `color`, `expression`, `answerCount`, `closedAt` (`null` while live). `answered` / `answeredAt` are kept for older clients and mean "closed" / `closedAt`. The response also carries `rules: {maxAnswers, windowMs}` so the client can show "2 of 3 answers". |
+| GET  | `/api/questions` | — | live (open + ripening) and recently closed questions. Each item: `id`, `text`, `color`, `expression`, `answerCount`, `closedAt` (`null` while live). `answered` / `answeredAt` are kept for older clients and mean "closed" / `closedAt`. The response also carries `rules: {maxAnswers, windowMs}` so the client can show "2 of 3 answers", and `here` — how many visitors have the meadow open right now (you included). |
 | GET  | `/api/stars` | — | `{stars, repo}` — the GitHub star count behind the top-bar button, fetched by the server and cached for 10 minutes (`stars` is `null` until GitHub has answered once). Repo is `GITHUB_REPO`, default `MadeBy-Ali/WonderMeadow`. |
 | POST | `/api/questions` | `{text, color?, expression?}` | `color` is `f`/`m`, `expression` is `smile`/`frown`; returns `201 {id, code}`; `400` with a gentle reason if the keeper declines it |
 | POST | `/api/questions/:id/answers` | `{alias, text}` | `201 {ok, count, closed}`; `409` the question has already closed (`code: "closed"`); `400` you already answered it (`code: "duplicate"`), the alias is blank, or the keeper declined it; `404` unknown question |
