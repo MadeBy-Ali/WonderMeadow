@@ -6,6 +6,7 @@
  */
 const express = require('express');
 const compression = require('compression')
+const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
@@ -109,6 +110,24 @@ const app = express();
 app.use(compression());
 if(process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY));
 app.use(express.json({ limit: '16kb' }));
+// ---------- the front page, with its link-preview tags pointing at the public address ----------
+// Chat apps and social sites need ABSOLUTE urls in og:image, so index.html carries __ORIGIN__
+// and we fill it in per request: MEADOW_PUBLIC_URL if set (recommended in production, e.g.
+// https://meadow.example.com), otherwise whatever address the visitor reached us on.
+const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+function publicOrigin(req){
+  const fixed = (process.env.MEADOW_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+  if(/^https?:\/\/[^\s"'<>]+$/i.test(fixed)) return fixed;
+  const host = req.get('host') || '';
+  // the Host header is visitor-controlled and lands inside an HTML attribute: accept plain hosts only
+  return /^[a-z0-9.-]+(:\d{1,5})?$/i.test(host) ? `${req.protocol}://${host}` : '';
+}
+function sendIndex(req, res){
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('html').send(INDEX_HTML.replace(/__ORIGIN__/g, publicOrigin(req)));
+}
+app.get(['/', '/index.html'], sendIndex);
+
 app.use(express.static(path.join(__dirname, 'public'), {
   maxAge: '1h',
   setHeaders(res, filePath){

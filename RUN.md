@@ -31,6 +31,7 @@ Optional extras (all have defaults, see the Ripening section of the README):
 | `MEADOW_MAX_ANSWERS` | answers needed to close a question (default `3`) |
 | `MEADOW_RIPEN_MINUTES` | minutes after the first answer before it closes (default `1440`) |
 | `MEADOW_HASH_SECRET` | set it in production so "who answered" survives restarts (`openssl rand -hex 24`) |
+| `MEADOW_PUBLIC_URL` | the public address (`https://your.domain`) for link-preview cards; if unset it is taken from the request |
 | `MEADOW_KEEPER_ID` / `MEADOW_KEEPER_ASCEND` | your own never-ascending wanderer; set `ASCEND=1` to let it go |
 
 With **neither** AI key set the keeper is off: no moderation, and the "resident"

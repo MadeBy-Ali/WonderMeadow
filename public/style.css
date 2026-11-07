@@ -732,3 +732,31 @@ html.opener-on #opener { display: block; }
 /* replaying the opener from the meadow: start transparent + blurred, then the
    normal #opener transition fades and sharpens it in */
 #opener.entering { opacity: 0; filter: blur(14px); transition: none; }
+
+/* ---------- idle tour: the interface steps back and the wanderer's question floats up ---------- */
+.topbar, .hint, .presence, #follow-chip { transition: opacity 1.2s ease; }
+html.touring .topbar, html.touring .hint, html.touring .presence, html.touring #follow-chip { opacity: 0; pointer-events: none; }
+html.touring .topbar > * { pointer-events: none; }
+.tour-caption {
+  position: fixed;
+  left: 50%;
+  bottom: 11vh;
+  transform: translate(-50%, 8px);
+  z-index: 16;
+  width: min(560px, 86vw);
+  text-align: center;
+  color: #fff;
+  font-size: clamp(1.05rem, 2.6vw, 1.45rem);
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-shadow: 0 2px 14px rgba(30, 24, 70, 0.85), 0 0 3px rgba(30, 24, 70, 0.6);
+  opacity: 0;
+  transition: opacity 0.9s ease, transform 0.9s ease;
+  pointer-events: none;
+}
+.tour-caption.on { opacity: 1; transform: translate(-50%, 0); }
+.tour-caption q { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; quotes: "\201C" "\201D"; }
+.tour-caption small { display: block; margin-top: 10px; font-size: 0.72rem; font-weight: 500; opacity: 0.75; letter-spacing: 0.08em; }
+html[data-mood="cozy"] .tour-caption { text-shadow: 0 2px 14px rgba(120, 60, 60, 0.8), 0 0 3px rgba(120, 60, 60, 0.55); }
+@media (prefers-reduced-motion: reduce) { .tour-caption { transition: opacity 0.4s ease; transform: translate(-50%, 0); } }

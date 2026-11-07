@@ -4,9 +4,25 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
   <title>Wonder Meadow — ask the meadow, anyone may answer</title>
+  <meta name="description" content="Whisper a question to the meadow. It wanders as a little character until a stranger answers it, then it ascends. Anonymous, gentle, no accounts." />
+  <meta name="theme-color" content="#3b3566" />
+  <!-- link previews (chat apps, socials). __ORIGIN__ is filled in by server.js with the public address -->
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="Wonder Meadow" />
+  <meta property="og:title" content="Wonder Meadow — ask the meadow, anyone may answer" />
+  <meta property="og:description" content="Whisper a question to the meadow. It wanders as a little character until a stranger answers it, then it ascends." />
+  <meta property="og:url" content="__ORIGIN__/" />
+  <meta property="og:image" content="__ORIGIN__/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="A dusk meadow where small wandering characters carry glowing questions" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Wonder Meadow — ask the meadow, anyone may answer" />
+  <meta name="twitter:description" content="Whisper a question to the meadow. It wanders as a little character until a stranger answers it." />
+  <meta name="twitter:image" content="__ORIGIN__/og.png" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>" />
   <!-- ?v= busts the 1-hour browser cache on main.js/opener.js/style.css: bump it on every release -->
-  <link rel="stylesheet" href="style.css?v=14" />
+  <link rel="stylesheet" href="style.css?v=15" />
   <script>
     // decide BEFORE first paint whether the opener shows (no flash of the meadow first).
     // First visit only; ?intro=1 forces it, ?intro=0 skips it.
@@ -65,6 +81,7 @@
   </header>
 
   <div id="presence" class="presence" aria-live="polite"></div>
+  <div id="tour-caption" class="tour-caption" aria-live="off"></div>
   <div id="hint" class="hint">drag to look around · pinch or scroll to zoom · tap a wanderer to help them</div>
 
   <!-- ASK modal -->
@@ -200,7 +217,7 @@
     <button class="op-enter" type="button">Enter the meadow →</button>
   </div>
 
-  <script type="module" src="opener.js?v=14"></script>
-  <script type="module" src="main.js?v=14"></script>
+  <script type="module" src="opener.js?v=15"></script>
+  <script type="module" src="main.js?v=15"></script>
 </body>
 </html>

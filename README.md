@@ -292,8 +292,16 @@ far apart and each holds only one sitter, so they always sit alone.
   as they stroll, keeping whatever angle and zoom you've set (you can still orbit).
 - **The idle tour** — leave the meadow alone for 10 seconds without picking anyone and
   the camera goes visiting by itself: it follows a random wanderer, circling slowly,
-  and hops to another every 10 seconds. Any tap, drag, scroll or key ends the tour.
-  Tune `IDLE_START_S` / `IDLE_HOP_S` in [`public/main.js`](public/main.js).
+  and hops to another every 13 seconds. The wanderer's question floats up as a caption,
+  and the interface (buttons, hints, presence line) fades away so it feels like a quiet
+  screensaver; nudging the mouse shows it again for a moment. Any tap, scroll or key ends
+  the tour. Tune `IDLE_START_S` / `IDLE_HOP_S` in [`public/main.js`](public/main.js).
+- **Link previews** — pasting the address into a chat app or social site shows a card
+  (`public/og.png`, 1200×630, plus title and description). Those tags need absolute URLs,
+  so `server.js` fills them in per request; set `MEADOW_PUBLIC_URL` (e.g.
+  `https://meadow.example.com`) in production to pin it. Replace `og.png` to change the card.
+- **A second, slower melody** — every minute or so a lower, bell-like phrase (one of three
+  per mood) drifts in over the music box and leaves again, so the loop doesn't wear thin.
 - **Strangers here with you** — a quiet line in the bottom corner: "✦ 3 strangers are
   here with you" (or, when it's just you, that the meadow keeps you company). The count
   is real: the server notes who polled the meadow in the last 90 seconds, using a keyed

@@ -1656,8 +1656,26 @@ function updateChips() {
 // hops to another one every IDLE_HOP_S seconds. Any tap, drag, scroll or key ends the
 // tour (the camera stays with whoever it was visiting; tap empty meadow to roam free).
 const IDLE_START_S = 10;
-const IDLE_HOP_S = 10;
-const idle = { quietFor: 0, active: false, hopIn: 0, rec: null };
+const IDLE_HOP_S = 13; // long enough to read the question that floats up
+const IDLE_PEEK_S = 2.5; // moving the mouse shows the interface for this long without ending the tour
+const idle = { quietFor: 0, active: false, hopIn: 0, rec: null, peek: 0 };
+
+// the caption: the question of whoever the camera is visiting, fading out and in on each hop
+const tourCaption = document.getElementById('tour-caption'); // ($ is defined further down)
+let captionTimer = 0;
+function showCaption(text) {
+  clearTimeout(captionTimer);
+  tourCaption.classList.remove('on');
+  if (!text) return;
+  captionTimer = setTimeout(() => { // wait for the old line to fade, then swap
+    const q = document.createElement('q');
+    q.textContent = text; // user text: never innerHTML
+    const hint = document.createElement('small');
+    hint.textContent = 'a wanderer asks · tap anywhere to explore yourself';
+    tourCaption.replaceChildren(q, hint);
+    tourCaption.classList.add('on');
+  }, 900);
+}
 
 function noteActivity() {
   idle.quietFor = 0;
@@ -1670,14 +1688,23 @@ for (const type of ['pointerdown', 'wheel', 'keydown', 'touchstart']) {
 function stopIdle() {
   idle.active = false;
   idle.rec = null;
+  idle.peek = 0;
   controls.autoRotate = false;
+  document.documentElement.classList.remove('touring');
+  showCaption('');
 }
+
+// a mouse nudge brings the interface back for a moment (a tap or key still ends the tour)
+window.addEventListener('pointermove', (e) => {
+  if (idle.active && e.pointerType === 'mouse' && (Math.abs(e.movementX) + Math.abs(e.movementY)) > 2) idle.peek = IDLE_PEEK_S;
+}, { passive: true });
 
 function idleHop() {
   const pool = [...characters.values()].filter((rec) => !rec.ascending && rec !== idle.rec);
   if (!pool.length) { idle.hopIn = 2; return; } // nobody (else) around yet — look again soon
   idle.rec = pool[Math.floor(Math.random() * pool.length)];
   focusOn(idle.rec);
+  showCaption(idle.rec.text);
   idle.hopIn = IDLE_HOP_S;
 }
 
@@ -1694,6 +1721,8 @@ function updateIdle(rawDt) {
     idleHop();
     return;
   }
+  idle.peek = Math.max(0, idle.peek - rawDt);
+  document.documentElement.classList.toggle('touring', idle.peek <= 0);
   if (focus.rec !== idle.rec) { // they ascended and faded, or something else took the camera
     if (!focus.rec) idleHop(); else stopIdle();
     return;
@@ -2360,15 +2389,66 @@ function startSound() {
         osc.stop(t + 3.6);
       }
     };
+    // The second voice: every minute or so a slower, lower melody drifts in over the box —
+    // long soft bells through an echo, then it leaves again. A few phrases per mood, picked at
+    // random, so the meadow doesn't loop the same 20 seconds all evening.
+    const SLOW_NOTE = { G3: 196.0, A3: 220.0, C4: 261.63, D4: 293.66, E4: 329.63, G4: 392.0, A4: 440.0 };
+    const SLOW_STEP = 1.9;
+    const echo = ctx.createDelay(1);
+    echo.delayTime.value = 0.52;
+    const echoFb = ctx.createGain();
+    echoFb.gain.value = 0.38;
+    const echoLp = ctx.createBiquadFilter();
+    echoLp.type = 'lowpass';
+    echoLp.frequency.value = 1600;
+    const slowBus = ctx.createGain();
+    slowBus.gain.value = 1;
+    slowBus.connect(master);
+    slowBus.connect(echo);
+    echo.connect(echoLp).connect(echoFb).connect(echo);
+    echoLp.connect(master);
+    const bell = (freq, t) => {
+      for (const [mult, vol, tail] of [[1, 0.05, 7], [2.005, 0.01, 4]]) { // the slight detune makes it shimmer
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = freq * mult;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol, t + 0.35); // a slow swell, no pluck
+        g.gain.exponentialRampToValueAtTime(0.0001, t + tail);
+        osc.connect(g).connect(slowBus);
+        osc.start(t);
+        osc.stop(t + tail + 0.1);
+      }
+    };
+    const slow = { phrase: null, i: 0, nextT: 0, startAt: ctx.currentTime + 40 };
+    sound.slow = slow; // (for debugging)
+
     let step = 0;
     let nextT = ctx.currentTime + 2;
     setInterval(() => { // keep a little runway of scheduled notes ahead of playback
-      while (nextT < ctx.currentTime + 0.8) {
-        const phrase = SOUND_MOODS[mood.name].phrase;
-        const name = phrase[step % phrase.length];
-        if (name) pluck(NOTE[name], nextT);
+      const now = ctx.currentTime;
+      const m = SOUND_MOODS[mood.name];
+      while (nextT < now + 0.8) {
+        const name = m.phrase[step % m.phrase.length];
+        // while the slow voice is singing the box thins out to every other note
+        if (name && !(slow.phrase && step % 2)) pluck(NOTE[name], nextT);
         step++;
         nextT += STEP;
+      }
+      if (!slow.phrase && now >= slow.startAt) {
+        slow.phrase = m.slow[Math.floor(Math.random() * m.slow.length)];
+        slow.i = 0;
+        slow.nextT = now + 0.5;
+      }
+      while (slow.phrase && slow.nextT < now + 0.8) {
+        const name = slow.phrase[slow.i++];
+        if (name) bell(SLOW_NOTE[name], slow.nextT);
+        slow.nextT += SLOW_STEP;
+        if (slow.i >= slow.phrase.length) { // done: be quiet for a while
+          slow.phrase = null;
+          slow.startAt = slow.nextT + 45 + Math.random() * 60;
+        }
       }
     }, 250);
   }
@@ -2475,6 +2555,11 @@ const SOUND_MOODS = {
       'E4', null, 'G4', null, 'A4', null, 'C5', 'B4',
       null, null, 'A4', null, null, null, null, null,
     ],
+    slow: [ // A minor, one long breath each (null = a beat of silence)
+      ['A3', null, 'E4', null, 'D4', 'C4', null, 'A3', null, null],
+      ['D4', null, 'C4', null, 'A3', null, 'G3', null, 'A3', null, null],
+      ['E4', 'D4', null, 'C4', null, 'A3', null, null, 'G3', null, 'A3', null],
+    ],
   },
   cozy: { // the same notes leaning on C major, over a C drone — the same box, just warmer
     drone: [65.41, 65.8, 98.0], wind: 0.55, rain: 0,
@@ -2483,6 +2568,11 @@ const SOUND_MOODS = {
       null, null, 'D5', null, 'E5', null, null, null,
       'C5', null, 'G4', null, 'E4', null, 'G4', 'A4',
       null, null, 'C5', null, null, null, null, null,
+    ],
+    slow: [ // C major — the same slow breaths, turned toward the light
+      ['C4', null, 'G4', null, 'E4', 'D4', null, 'C4', null, null],
+      ['E4', null, 'G4', null, 'A4', null, 'G4', null, 'E4', null, null],
+      ['G4', 'E4', null, 'D4', null, 'C4', null, null, 'A3', null, 'C4', null],
     ],
   },
 };

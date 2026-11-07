@@ -45,6 +45,7 @@ services:
       MEADOW_HASH_SECRET: ${MEADOW_HASH_SECRET:-}
       MEADOW_KEEPER_ID: ${MEADOW_KEEPER_ID:-}
       MEADOW_KEEPER_ASCEND: ${MEADOW_KEEPER_ASCEND:-}
+      MEADOW_PUBLIC_URL: ${MEADOW_PUBLIC_URL:-}
     # Loopback only: the reverse proxy (Caddy) on this machine can reach the app,
     # the public internet cannot. Keeps TRUST_PROXY honest — nobody can bypass the
     # proxy and forge X-Forwarded-For.
