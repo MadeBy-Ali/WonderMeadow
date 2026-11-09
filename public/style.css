@@ -164,10 +164,12 @@ html[data-mood="cozy"] .loading { background: linear-gradient(#8f86c8, #f2bf9f);
 .presence.on { opacity: 1; }
 html[data-mood="cozy"] .presence { color: rgba(255, 250, 244, 0.95); text-shadow: 0 1px 8px rgba(120, 70, 60, 0.6); }
 @media (max-width: 1000px) {
-  .presence { bottom: 62px; } /* the hint pill is as wide as the corner at this size: sit above it */
+  /* the hint pill is as wide as the corner at this size, and the "following" chip sits at
+     48–90px: stay above both (it used to hide behind the chip) */
+  .presence { bottom: 100px; }
 }
 @media (max-width: 620px) {
-  .presence { left: 12px; bottom: 74px; font-size: 0.72rem; } /* clear of the hint and the chips */
+  .presence { left: 12px; bottom: 100px; font-size: 0.72rem; }
 }
 
 /* ---------- modals ---------- */
@@ -553,14 +555,28 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
 /* ---------- mobile ---------- */
 @media (max-width: 620px) {
   .brand-text p { display: none; }
-  .brand { padding: 6px 12px 6px 10px; }
-  .brand-text h1 { font-size: 0.95rem; }
-  .topbar { flex-wrap: wrap; padding: 10px; }
-  .topbar-actions { width: 100%; justify-content: stretch; }
-  .topbar-actions .btn { flex: 1; padding: 12px 10px; font-size: 0.85rem; }
-  .topbar-actions .btn-icon { flex: 0 0 auto; }
-  .topbar-actions .btn-mood { flex: 0 0 auto; padding: 8px; }
-  .topbar-actions .btn-github { flex: 0 0 auto; padding: 10px 11px; }
+  .brand { order: 1; margin-right: auto; padding: 6px 12px 6px 10px; }
+  .brand-emoji { font-size: 1.3rem; }
+  .brand-text h1 { font-size: 0.9rem; white-space: nowrap; }
+
+  /* two rows:  [brand ........ github · mood · sound]
+                [  Ask the meadow  ] [  I have a code  ]
+     display:contents dissolves the .topbar-actions wrapper so .topbar can lay every
+     button out itself: the three small ones sit beside the brand, the two main
+     actions get a full-width row of big thumb targets. (Before, all five shared one
+     row, so on a 360px phone "Ask the meadow" wrapped onto 3 lines inside its
+     rounded pill and became a circle.) */
+  .topbar { flex-wrap: wrap; justify-content: flex-start; gap: 8px 6px; padding: 10px; }
+  .topbar-actions { display: contents; }
+  .topbar .btn { white-space: nowrap; }
+  .topbar .btn-github,
+  .topbar .btn-mood,
+  .topbar .btn-icon { order: 2; flex: 0 0 auto; }
+  .topbar .btn-github { padding: 9px 10px; gap: 5px; }
+  .topbar .btn-github svg { width: 16px; height: 16px; }
+  .topbar .btn-mood { padding: 6px; }
+  .topbar .btn-icon { padding: 11px 12px; }
+  #btn-ask, #btn-lookup { order: 3; flex: 1 1 calc(50% - 4px); padding: 12px 10px; font-size: 0.85rem; }
   .mood-label { display: none; }
   .overlay { place-items: end center; padding: 0; }
   .card {
@@ -570,6 +586,24 @@ textarea:focus, .input:focus { outline: none; border-color: var(--green); }
   }
   #code-value { font-size: 1.15rem; }
   .hint { bottom: 10px; font-size: 0.7rem; }
+}
+/* the narrowest phones (360px class): the brand drops its leaf so the brand + three small
+   buttons still fit on one row, even when the GitHub button says "Star" instead of a count */
+@media (max-width: 440px) {
+  .gh-star { display: none; } /* the GitHub mark + a number already reads as "stars" */
+  .topbar { column-gap: 5px; }
+  .topbar .btn-github { padding: 9px 8px; }
+  .topbar .btn-mood { padding: 5px; }
+  .topbar .btn-icon { padding: 11px 10px; }
+}
+@media (max-width: 400px) {
+  .brand-emoji { display: none; }
+  .brand { padding: 6px 10px 6px 12px; }
+  .brand-text h1 { font-size: 0.85rem; }
+}
+/* tiny screens (iPhone SE class): the GitHub link is the one thing that can go */
+@media (max-width: 340px) {
+  .btn-github { display: none; }
 }
 
 /* ---------- the opener (first-load prelude; see opener.js / intro.config.js) ---------- */
